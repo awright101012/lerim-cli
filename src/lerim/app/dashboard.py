@@ -849,7 +849,8 @@ def _serialize_full_config(config: Config) -> dict[str, Any]:
         "server": {
             "host": config.server_host,
             "port": config.server_port,
-            "poll_interval_minutes": config.poll_interval_minutes,
+            "sync_interval_minutes": config.sync_interval_minutes,
+            "maintain_interval_minutes": config.maintain_interval_minutes,
             "sync_window_days": config.sync_window_days,
             "sync_max_sessions": config.sync_max_sessions,
             "sync_max_workers": config.sync_max_workers,
@@ -1212,10 +1213,14 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             limit = int(body.get("limit") or 12)
             import threading
 
+            from logfire.propagate import attach_context, get_context
+
+            otel_ctx = get_context()
             result_holder: list[dict[str, Any]] = []
 
             def _run_ask() -> None:
                 """Execute ask in background thread."""
+                attach_context(otel_ctx)
                 result_holder.append(api_ask(question, limit=limit))
 
             thread = threading.Thread(target=_run_ask)
@@ -1231,10 +1236,14 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             import threading
             import uuid
 
+            from logfire.propagate import attach_context, get_context
+
+            otel_ctx = get_context()
             job_id = str(uuid.uuid4())[:8]
 
             def _run_sync() -> None:
                 """Execute sync in background."""
+                attach_context(otel_ctx)
                 api_sync(
                     agent=body.get("agent"),
                     window=body.get("window", "7d"),
@@ -1253,10 +1262,14 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             import threading
             import uuid
 
+            from logfire.propagate import attach_context, get_context
+
+            otel_ctx = get_context()
             job_id = str(uuid.uuid4())[:8]
 
             def _run_maintain() -> None:
                 """Execute maintain in background."""
+                attach_context(otel_ctx)
                 api_maintain(
                     force=bool(body.get("force")),
                     dry_run=bool(body.get("dry_run")),

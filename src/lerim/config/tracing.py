@@ -23,9 +23,11 @@ def configure_tracing(config: Config) -> None:
 
     logfire.configure(
         send_to_logfire="if-token-present",
+        service_name="lerim",
         console=False,
     )
-    logfire.instrument_pydantic_ai()
+    logfire.instrument_pydantic_ai(include_content=config.tracing_include_content)
+    logfire.instrument_dspy()
     if config.tracing_include_httpx:
         logfire.instrument_httpx(capture_all=True)
 

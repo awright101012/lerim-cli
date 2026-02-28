@@ -87,6 +87,7 @@ Fast, deterministic tests with no LLM calls and no network. External state (conf
 | `test_access_tracker.py` | Memory access tracking: `init_access_db`, `record_access`, `get_access_stats`, `is_body_read`, `extract_memory_id` |
 | `test_queue.py` | Queue facade verification: re-export completeness, identity with catalog originals |
 | `test_logging.py` | Logger configuration |
+| `test_tracing.py` | OpenTelemetry tracing configuration: service_name, instrument_pydantic_ai, instrument_dspy, instrument_httpx |
 | `test_skills.py` | Skill file discovery |
 | `test_indexer_platform_paths.py` | Platform path resolution for indexing |
 | `test_extract_lead_authority.py` | Lead agent is sole write authority |

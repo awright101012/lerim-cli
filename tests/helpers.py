@@ -31,7 +31,6 @@ def make_config(base: Path) -> Config:
         decay_recent_access_grace_days=30,
         server_host="127.0.0.1",
         server_port=8765,
-        poll_interval_minutes=5,
         sync_interval_minutes=5,
         maintain_interval_minutes=5,
         lead_role=LLMRoleConfig(
