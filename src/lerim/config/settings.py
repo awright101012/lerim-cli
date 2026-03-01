@@ -275,6 +275,7 @@ class Config:
     openai_api_key: str | None
     zai_api_key: str | None
     openrouter_api_key: str | None
+    minimax_api_key: str | None
 
     provider_api_bases: dict[str, str]
 
@@ -607,6 +608,8 @@ def load_config() -> Config:
         openai_api_key=_to_non_empty_string(os.environ.get("OPENAI_API_KEY")) or None,
         zai_api_key=_to_non_empty_string(os.environ.get("ZAI_API_KEY")) or None,
         openrouter_api_key=_to_non_empty_string(os.environ.get("OPENROUTER_API_KEY"))
+        or None,
+        minimax_api_key=_to_non_empty_string(os.environ.get("MINIMAX_API_KEY"))
         or None,
         provider_api_bases=_parse_string_table(
             toml_data.get("providers", {})

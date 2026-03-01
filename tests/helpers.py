@@ -78,8 +78,10 @@ def make_config(base: Path) -> Config:
         openai_api_key=None,
         zai_api_key=None,
         openrouter_api_key=None,
+        minimax_api_key=None,
         provider_api_bases={
-            "zai": "https://api.z.ai/api/paas/v4",
+            "minimax": "https://api.minimax.io/v1",
+            "zai": "https://api.z.ai/api/coding/paas/v4",
             "openai": "https://api.openai.com/v1",
             "openrouter": "https://openrouter.ai/api/v1",
             "ollama": "http://127.0.0.1:11434",

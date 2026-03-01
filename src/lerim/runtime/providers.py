@@ -56,6 +56,8 @@ def _api_key_for_provider(config: Config, provider: str) -> str | None:
         return config.openai_api_key
     if provider == "anthropic":
         return config.anthropic_api_key
+    if provider == "minimax":
+        return config.minimax_api_key
     return None
 
 
@@ -108,7 +110,7 @@ def _build_single_orchestration_model(
             else ollama_base,
         )
         return OpenAIChatModel(model_name=model, provider=provider_obj)
-    if provider_name in {"zai", "openai"}:
+    if provider_name in {"zai", "openai", "minimax"}:
         provider_obj = OpenAIProvider(
             api_key=_api_key_for_provider(config, provider_name),
             base_url=api_base or _default_api_base(provider_name),
@@ -193,9 +195,9 @@ def _build_dspy_lm_for_provider(
             max_tokens=16000,
             extra_body=extra_body,
         )
-    if provider in {"zai", "openai"}:
+    if provider in {"zai", "openai", "minimax"}:
         api_key = _api_key_for_provider(cfg, provider)
-        env_name = "ZAI_API_KEY" if provider == "zai" else "OPENAI_API_KEY"
+        env_name = {"zai": "ZAI_API_KEY", "openai": "OPENAI_API_KEY", "minimax": "MINIMAX_API_KEY"}[provider]
         if not api_key:
             raise RuntimeError(f"missing_api_key:{env_name} required for {role_label}")
         return dspy.LM(
@@ -234,7 +236,8 @@ def list_provider_models(provider: str) -> list[str]:
     """Return static provider model suggestions for dashboard UI selections."""
     normalized = str(provider).strip().lower()
     options = {
-        "zai": ["glm-4.5-air"],
+        "zai": ["glm-4.7", "glm-4.5-air", "glm-4.5"],
+        "minimax": ["MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
         "openrouter": [
             "qwen/qwen3-coder-30b-a3b-instruct",
             "anthropic/claude-sonnet-4-5-20250929",
