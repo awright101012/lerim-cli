@@ -224,5 +224,8 @@ def test_log_activity_appends_line(tmp_path, monkeypatch) -> None:
 
     lines = log_file.read_text().splitlines()
     assert len(lines) == 2
-    assert "| sync     | myproject | 3 new, 1 updated, 2 sessions | 4.2s" in lines[0]
-    assert "| maintain | myproject | 2 archived, 1 merged | 6.2s" in lines[1]
+    assert (
+        "| sync     | myproject | 3 new, 1 updated, 2 sessions | $0.0000 | 4.2s"
+        in lines[0]
+    )
+    assert "| maintain | myproject | 2 archived, 1 merged | $0.0000 | 6.2s" in lines[1]

@@ -91,6 +91,7 @@ Checklist:
 Instructions:
 
 1. SCAN: Use explore, read, glob, grep tools to inspect all memory files in {memory_root}/decisions/ and {memory_root}/learnings/. Parse frontmatter (id, title, confidence, tags, created, updated) and body content. You can call up to 4 explore() calls in the SAME tool-call turn for parallel execution when you have independent queries.
+   IMPORTANT: Process memories in chronological order (oldest "created" date first). Later memories may update or supersede earlier ones, so always resolve conflicts in favor of the newer memory.
 
 2. ANALYZE DUPLICATES: Identify memories that cover the same topic or have substantially overlapping content. Group them by similarity.
 

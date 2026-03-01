@@ -8,7 +8,6 @@ import sqlite3
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -250,6 +249,7 @@ class SyncSummary:
     learnings_new: int
     learnings_updated: int
     run_ids: list[str]
+    cost_usd: float = 0.0
 
 
 def resolve_window_bounds(
@@ -342,34 +342,39 @@ def _process_one_job(job: dict[str, Any]) -> dict[str, Any]:
         "status": "extracted",
         "learnings_new": int(counts.get("add") or 0),
         "learnings_updated": int(counts.get("update") or 0),
+        "cost_usd": float(result.get("cost_usd") or 0),
     }
 
 
 def _process_claimed_jobs(
     claimed: list[dict[str, Any]],
-    *,
-    max_workers: int = 4,
-) -> tuple[int, int, int, int, int]:
-    """Process claimed jobs in parallel. Returns (extracted, failed, skipped, new, updated)."""
+) -> tuple[int, int, int, int, int, float]:
+    """Process claimed jobs sequentially in chronological order.
+
+    Jobs are already sorted oldest-first by ``claim_session_jobs``.
+    Sequential processing ensures that later sessions can correctly
+    update or supersede memories created by earlier ones.
+
+    Returns (extracted, failed, skipped, new, updated, cost_usd).
+    """
     extracted = 0
     failed = 0
     skipped = 0
     learnings_new = 0
     learnings_updated = 0
-    workers = min(max(max_workers, 1), len(claimed)) if claimed else 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_process_one_job, job): job for job in claimed}
-        for future in as_completed(futures):
-            result = future.result()
-            if result["status"] == "extracted":
-                extracted += 1
-                learnings_new += result.get("learnings_new", 0)
-                learnings_updated += result.get("learnings_updated", 0)
-            elif result["status"] == "failed":
-                failed += 1
-            elif result["status"] == "skipped":
-                skipped += 1
-    return extracted, failed, skipped, learnings_new, learnings_updated
+    cost_usd = 0.0
+    for job in claimed:
+        result = _process_one_job(job)
+        if result["status"] == "extracted":
+            extracted += 1
+            learnings_new += result.get("learnings_new", 0)
+            learnings_updated += result.get("learnings_updated", 0)
+            cost_usd += result.get("cost_usd", 0.0)
+        elif result["status"] == "failed":
+            failed += 1
+        elif result["status"] == "skipped":
+            skipped += 1
+    return extracted, failed, skipped, learnings_new, learnings_updated, cost_usd
 
 
 def run_sync_once(
@@ -470,6 +475,7 @@ def run_sync_once(
         failed = 0
         learnings_new = 0
         learnings_updated = 0
+        cost_usd = 0.0
         projects: set[str] = set()
         claim_limit = max(max_sessions, 1)
 
@@ -487,13 +493,14 @@ def run_sync_once(
             target_run_ids = [
                 str(item.get("run_id") or "") for item in claimed if item.get("run_id")
             ]
-            max_workers = get_config().sync_max_workers
-            extracted, failed, routing_skipped, learnings_new, learnings_updated = (
-                _process_claimed_jobs(
-                    claimed,
-                    max_workers=max_workers,
-                )
-            )
+            (
+                extracted,
+                failed,
+                routing_skipped,
+                learnings_new,
+                learnings_updated,
+                cost_usd,
+            ) = _process_claimed_jobs(claimed)
             skipped += routing_skipped
 
         summary = SyncSummary(
@@ -504,6 +511,7 @@ def run_sync_once(
             learnings_new=learnings_new,
             learnings_updated=learnings_updated,
             run_ids=target_run_ids,
+            cost_usd=cost_usd,
         )
 
         code = EXIT_OK
@@ -548,6 +556,7 @@ def run_sync_once(
                 ", ".join(sorted(projects)) or "global",
                 ", ".join(parts),
                 time.monotonic() - t0,
+                cost_usd=cost_usd,
             )
         return code, summary
     finally:
@@ -619,11 +628,13 @@ def run_maintain_once(
                     if val:
                         parts.append(f"{val} {key}")
                 if parts:
+                    maintain_cost = float(result.get("cost_usd") or 0)
                     log_activity(
                         "maintain",
                         project_name,
                         ", ".join(parts),
                         time.monotonic() - t0,
+                        cost_usd=maintain_cost,
                     )
             except Exception as exc:
                 failed_projects.append(project_name)

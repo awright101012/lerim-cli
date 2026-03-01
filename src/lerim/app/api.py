@@ -64,7 +64,7 @@ def api_ask(question: str, limit: int = 12) -> dict[str, Any]:
     context_docs: list[dict[str, Any]] = []
     prompt = build_ask_prompt(question, hits, context_docs, memory_root=memory_root)
     agent = LerimAgent()
-    response, session_id = agent.ask(
+    response, session_id, cost_usd = agent.ask(
         prompt, cwd=str(Path.cwd()), memory_root=memory_root
     )
     error = looks_like_auth_error(response)
@@ -73,6 +73,7 @@ def api_ask(question: str, limit: int = 12) -> dict[str, Any]:
         "agent_session_id": session_id,
         "memories_used": [],
         "error": bool(error),
+        "cost_usd": cost_usd,
     }
 
 

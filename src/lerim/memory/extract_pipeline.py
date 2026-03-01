@@ -19,6 +19,7 @@ import dspy
 from lerim.config.settings import get_config
 from lerim.memory.schemas import MemoryCandidate
 from lerim.memory.utils import configure_dspy_lm, window_transcript
+from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
 
 
@@ -87,6 +88,7 @@ def _extract_candidates(
 
     all_candidates: list[dict[str, Any]] = []
     extractor = dspy.ChainOfThought(MemoryExtractSignature)
+    history_start = len(lm.history)
     with dspy.context(lm=lm):
         for window in windows:
             result = extractor(
@@ -103,16 +105,19 @@ def _extract_candidates(
                         all_candidates.append(item)
 
     if not all_candidates:
+        capture_dspy_cost(lm, history_start)
         return []
 
     # Single window: no merge needed
     if len(windows) == 1:
+        capture_dspy_cost(lm, history_start)
         return all_candidates
 
     # Multiple windows: merge and deduplicate
     merger = dspy.ChainOfThought(MemoryMergeSignature)
     with dspy.context(lm=lm):
         merge_result = merger(candidates=all_candidates, metadata=meta)
+    capture_dspy_cost(lm, history_start)
     merged = getattr(merge_result, "primitives", [])
     if not isinstance(merged, list):
         return all_candidates

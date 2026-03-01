@@ -13,6 +13,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from lerim.config.settings import Config, DSPyRoleConfig, LLMRoleConfig, get_config
+from lerim.runtime.cost_tracker import build_tracked_async_client
 
 RoleName = Literal["lead", "explorer"]
 DSPyRoleName = Literal["extract", "summarize"]
@@ -87,7 +88,8 @@ def _build_single_orchestration_model(
     provider_name = provider.strip().lower()
     if provider_name == "openrouter":
         provider_obj = OpenRouterProvider(
-            api_key=_api_key_for_provider(config, "openrouter")
+            api_key=_api_key_for_provider(config, "openrouter"),
+            http_client=build_tracked_async_client(),
         )
         settings = None
         if openrouter_provider_order:

@@ -238,4 +238,5 @@ def iter_sessions(
             )
         )
 
+    records.sort(key=lambda r: r.start_time or "")
     return records

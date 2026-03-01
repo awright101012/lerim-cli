@@ -281,6 +281,7 @@ WHERE key LIKE 'bubbleId:%' ORDER BY key"""
                 )
             )
 
+    records.sort(key=lambda r: r.start_time or "")
     return records
 
 

@@ -95,6 +95,7 @@ Fast, deterministic tests with no LLM calls and no network. External state (conf
 | `test_session_extract_writeback.py` | Session extraction writeback to catalog |
 | `test_daemon_sync_maintain.py` | Daemon loop scheduling: independent sync/maintain intervals, config fields |
 | `test_maintain_command.py` | Maintain CLI command routing |
+| `test_cost_tracker.py` | Cost tracker accumulator, httpx response hook, DSPy history capture |
 | `test_learning_runs.py` | Learning run tracking |
 | `test_agent_memory_write_flow.py` | Agent memory write flow (unit-level) |
 | `test_dashboard_read_only_contract.py` | Dashboard endpoints are read-only |

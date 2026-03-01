@@ -93,7 +93,7 @@ def _fake_agent_run_factory() -> Any:
         Path(artifacts["memory_actions"]).write_text(
             json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8"
         )
-        return "ok", "session-1"
+        return "ok", "session-1", 0.0
 
     return _fake_run
 

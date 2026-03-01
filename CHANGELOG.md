@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-03-01
+
+### Added
+
+- Per-run LLM cost tracking via OpenRouter's `usage.cost` response field. Cost (USD) logged in `activity.log` and returned in sync/maintain/ask result payloads.
+- Chronological (oldest-first) session processing for correct memory ordering.
+
+### Changed
+
+- Structured `write_memory` tool replaces raw markdown writes for memory files.
+- `_process_claimed_jobs` runs sequentially (was parallel) for chronological memory consistency.
+- Activity log format now includes cost column.
+
 ## [0.1.0] - 2026-02-28
 
 ### Added

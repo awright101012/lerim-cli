@@ -27,9 +27,10 @@ def test_agent_ask_responds(tmp_path):
         encoding="utf-8",
     )
     agent = LerimAgent()
-    response, session_id = agent.ask(
+    response, session_id, cost_usd = agent.ask(
         "What decisions have been made?",
         memory_root=tmp_path,
     )
+    assert isinstance(cost_usd, float)
     assert isinstance(response, str)
     assert len(response) > 0

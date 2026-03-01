@@ -27,10 +27,12 @@ def test_ask_end_to_end(tmp_path):
     from lerim.runtime.agent import LerimAgent
 
     agent = LerimAgent()
-    response, session_id = agent.ask(
+    response, session_id, cost_usd = agent.ask(
         "Respond with exactly: OK",
         memory_root=tmp_path,
     )
+    assert isinstance(cost_usd, float)
+    assert cost_usd >= 0.0
     assert isinstance(response, str)
     assert len(response.strip()) > 0
 

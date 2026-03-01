@@ -4,7 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.5] - 2026-03-01
+
+### Added
+
+- Per-run LLM cost tracking via OpenRouter's `usage.cost` response field. PydanticAI calls captured via httpx response hook; DSPy calls captured from LM history. Cost (USD) is logged in `activity.log` and returned in sync/maintain/ask result payloads.
+- `cost_usd` field on `SyncResultContract`, `MaintainResultContract`, and `api_ask` response.
+- Activity log format now includes cost column: `timestamp | op | project | stats | $cost | duration`.
+- Chronological (oldest-first) session processing — adapters sort sessions by `start_time`, `claim_session_jobs` orders ASC, `_process_claimed_jobs` runs sequentially so later sessions correctly update earlier memories.
+- Maintain prompt instructs chronological memory processing (oldest `created` first).
 
 ### Changed
 
@@ -12,13 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `write_file_tool` now raises `ModelRetry` for memory primitive paths (decisions/learnings), directing the LLM to use `write_memory` instead. Still accepts non-memory writes (JSON artifacts, reports, archived copies).
 - Restructured sync prompt into numbered steps with explicit batching instructions (parallel pipeline calls, parallel explores, parallel write_memory calls, parallel report writes).
 - Updated maintain prompt to use `write_memory` for consolidation and `write` only for archived copies and reports.
+- `_process_claimed_jobs` now runs sequentially (was parallel via `ThreadPoolExecutor`) to ensure chronological memory consistency.
 - Removed `_normalize_memory_write` (dead code after `write_memory` tool).
 - Removed `memory_write_schema_prompt()` (no longer needed — LLM doesn't write frontmatter).
-
-### Added
-
-- Activity log at `~/.lerim/activity.log` — one line per sync/maintain cycle with timestamp, project, stats, and duration. Only logs when work was actually done.
-- `run_maintain_once` now iterates over all registered projects in `config.projects`, running memory maintenance (decay, archive, consolidation) for each. Previously only maintained the CWD-based project.
 
 ### Fixed
 
@@ -28,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Infrastructure
 
 - Added `pytest-xdist` for parallel LLM-bound test execution. Smoke, integration, and e2e tests run with `-n auto` (~2x speedup for e2e: 10min → 5min).
+- Test runner defaults updated to match `default.toml` models (`x-ai/grok-4.1-fast` lead/explorer, `openai/gpt-5-nano` extract/summarize).
 
 ## [0.1.1] - 2026-02-28
 

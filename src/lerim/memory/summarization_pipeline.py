@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from lerim.memory.memory_record import slugify
 from lerim.config.settings import get_config, reload_config
 from lerim.memory.utils import configure_dspy_lm, window_transcript
+from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
 
 
@@ -152,6 +153,7 @@ def _summarize_trace(
     met = metrics or {}
     guid = guidance.strip()
 
+    history_start = len(lm.history)
     with dspy.context(lm=lm):
         if len(windows) == 1:
             # Single window: direct summarization
@@ -180,6 +182,7 @@ def _summarize_trace(
                 metrics=met,
                 guidance=guid,
             )
+    capture_dspy_cost(lm, history_start)
 
     payload = getattr(result, "summary_payload", None)
     if isinstance(payload, TraceSummaryCandidate):

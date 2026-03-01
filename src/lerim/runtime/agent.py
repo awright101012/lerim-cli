@@ -21,6 +21,7 @@ from lerim.runtime.contracts import MaintainCounts, SyncCounts
 from lerim.runtime.prompts import build_maintain_prompt, build_sync_prompt
 from lerim.runtime.prompts.maintain import build_maintain_artifact_paths
 from lerim.runtime.prompts.system import build_lead_system_prompt
+from lerim.runtime.cost_tracker import start_cost_tracking, stop_cost_tracking
 from lerim.runtime.providers import build_orchestration_model_from_role
 from lerim.runtime.subagents import get_explorer_agent
 from lerim.runtime.tools import (
@@ -71,6 +72,7 @@ class SyncResultContract(BaseModel):
     counts: SyncCounts
     written_memory_paths: list[str]
     summary_path: str
+    cost_usd: float = 0.0
 
 
 class MaintainResultContract(BaseModel):
@@ -81,6 +83,7 @@ class MaintainResultContract(BaseModel):
     run_folder: str
     artifacts: dict[str, str]
     counts: MaintainCounts
+    cost_usd: float = 0.0
 
 
 def _default_run_folder_name(prefix: str = "sync") -> str:
@@ -395,13 +398,14 @@ Always use tools to read/write files and produce concise completion output."""
         prompt: str,
         mode: str,
         context: RuntimeToolContext,
-    ) -> tuple[str, str]:
-        """Run one lead-agent prompt and return response text plus run id."""
+    ) -> tuple[str, str, float]:
+        """Run one lead-agent prompt and return (response_text, run_id, cost_usd)."""
         agent = self._build_lead_agent(mode)
         role = self.config.lead_role
         fallbacks = ", ".join(role.fallback_models) if role.fallback_models else "none"
         max_attempts = 3
         last_error = None
+        start_cost_tracking()
         with logfire.span(
             "lerim {mode} run",
             mode=mode,
@@ -416,7 +420,7 @@ Always use tools to read/write files and produce concise completion output."""
                     )
                     result = agent.run_sync(prompt, deps=context)
                     text = str(result.output or "").strip() or "(no response)"
-                    return text, str(result.run_id)
+                    return text, str(result.run_id), stop_cost_tracking()
                 except Exception as exc:
                     last_error = exc
                     error_type = type(exc).__name__
@@ -437,6 +441,7 @@ Always use tools to read/write files and produce concise completion output."""
                         wait_time = min(2**attempt, 8)
                         logger.info(f"[{mode}] Retrying in {wait_time}s...")
                         time.sleep(wait_time)
+            stop_cost_tracking()
             raise RuntimeError(
                 f"[{mode}] Failed after {max_attempts} attempts. Last error: {last_error}"
             ) from last_error
@@ -457,8 +462,8 @@ Always use tools to read/write files and produce concise completion output."""
         session_id: str | None = None,
         cwd: str | None = None,
         memory_root: str | Path | None = None,
-    ) -> tuple[str, str]:
-        """Run one ask prompt via lead runtime agent."""
+    ) -> tuple[str, str, float]:
+        """Run one ask prompt via lead runtime agent. Returns (response, session_id, cost_usd)."""
         runtime_cwd = (
             Path(cwd or self._default_cwd or str(Path.cwd())).expanduser().resolve()
         )
@@ -476,12 +481,12 @@ Always use tools to read/write files and produce concise completion output."""
             run_id=session_id or self.generate_session_id(),
             config=self.config,
         )
-        response, resolved_session = self._run_agent_once(
+        response, resolved_session, cost_usd = self._run_agent_once(
             prompt=prompt,
             mode="ask",
             context=context,
         )
-        return response, (session_id or resolved_session)
+        return response, (session_id or resolved_session), cost_usd
 
     def sync(
         self,
@@ -531,7 +536,7 @@ Always use tools to read/write files and produce concise completion output."""
             trace_path=trace_file,
             artifact_paths=artifact_paths,
         )
-        response, _ = self._run_agent_once(
+        response, _, cost_usd = self._run_agent_once(
             prompt=prompt,
             mode="sync",
             context=context,
@@ -598,6 +603,7 @@ Always use tools to read/write files and produce concise completion output."""
             "counts": counts,
             "written_memory_paths": written_memory_paths,
             "summary_path": str(summary_path_resolved),
+            "cost_usd": cost_usd,
         }
         return self._assert_sync_contract(payload)
 
@@ -641,7 +647,7 @@ Always use tools to read/write files and produce concise completion output."""
             run_id=run_folder.name,
             config=self.config,
         )
-        response, _ = self._run_agent_once(
+        response, _, cost_usd = self._run_agent_once(
             prompt=prompt,
             mode="maintain",
             context=context,
@@ -687,6 +693,7 @@ Always use tools to read/write files and produce concise completion output."""
             "run_folder": str(run_folder),
             "artifacts": {key: str(path) for key, path in artifact_paths.items()},
             "counts": counts,
+            "cost_usd": cost_usd,
         }
         return self._assert_maintain_contract(payload)
 

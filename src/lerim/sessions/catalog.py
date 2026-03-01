@@ -592,6 +592,8 @@ def index_new_sessions(
                 )
             )
 
+    # Sort chronologically (oldest first) so later sessions can update earlier ones.
+    new_sessions.sort(key=lambda s: s.start_time or "")
     return new_sessions if return_details else len(new_sessions)
 
 
@@ -738,7 +740,7 @@ def claim_session_jobs(
             SELECT *
             FROM session_jobs
             WHERE {" AND ".join(where_parts)}
-            ORDER BY start_time DESC, available_at ASC, id ASC
+            ORDER BY start_time ASC, available_at ASC, id ASC
             LIMIT ?
             """,
             [*params, limit],
