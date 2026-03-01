@@ -1,0 +1,194 @@
+# Installation
+
+Detailed installation instructions for Lerim, including prerequisites, Python setup, Docker configuration, and troubleshooting.
+
+## Prerequisites
+
+Before you begin, make sure you have:
+
+- **Python 3.10 or higher**
+- **Docker** installed ([get Docker](https://docs.docker.com/get-docker/)) — recommended for the always-on service
+- **An LLM API key** — OpenRouter, OpenAI, or Anthropic
+
+!!! tip "Docker is optional"
+    If you don't have Docker, you can run Lerim directly using `lerim serve` instead of `lerim up`. See [Running without Docker](#running-without-docker) below.
+
+## Install Lerim
+
+=== "pip"
+
+    ```bash
+    pip install lerim
+    ```
+
+=== "pipx (isolated)"
+
+    ```bash
+    pipx install lerim
+    ```
+
+=== "uv"
+
+    ```bash
+    uv pip install lerim
+    ```
+
+Verify the installation:
+
+```bash
+lerim --version
+```
+
+## Set up API keys
+
+Lerim needs an LLM provider for extraction and querying. Set at least one:
+
+=== "OpenRouter (recommended)"
+
+    ```bash
+    export OPENROUTER_API_KEY="sk-or-v1-..."
+    ```
+
+    OpenRouter is the default provider. It gives you access to multiple models including GPT-5-nano (extraction) and Grok-4.1-fast (agents).
+
+=== "OpenAI"
+
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+=== "ZAI"
+
+    ```bash
+    export ZAI_API_KEY="..."
+    ```
+
+!!! note
+    OpenRouter is the default provider. If you use a different provider, update `[roles.*]` in your config. See [model roles](configuration/model-roles.md).
+
+## First-time setup
+
+Run the interactive setup wizard:
+
+```bash
+lerim init
+```
+
+This will:
+
+1. Detect your installed coding agents (Claude Code, Codex, Cursor, OpenCode)
+2. Ask which agents you want to connect
+3. Write the config to `~/.lerim/config.toml`
+4. Check for Docker availability
+
+Then register your projects:
+
+```bash
+lerim project add .                     # current directory
+lerim project add ~/codes/my-app        # another project
+```
+
+## Start Lerim
+
+=== "Docker (recommended)"
+
+    ```bash
+    lerim up
+    ```
+
+    This starts a Docker container with the daemon + HTTP API + dashboard on `http://localhost:8765`.
+
+=== "Without Docker"
+
+    ```bash
+    lerim connect auto          # detect agent platforms
+    lerim serve                 # start API server + dashboard + daemon loop
+    ```
+
+## Running without Docker
+
+If you prefer not to use Docker, run Lerim directly:
+
+```bash
+lerim connect auto           # detect agent platforms
+lerim serve                  # start API server + dashboard + daemon loop
+```
+
+Then use `lerim ask`, `lerim sync`, `lerim status`, etc. as usual — they connect to the running server.
+
+## Troubleshooting
+
+### Docker not found
+
+If `lerim up` reports Docker is not found:
+
+```bash
+# Check Docker installation
+docker --version
+
+# On macOS, make sure Docker Desktop is running
+open -a Docker
+```
+
+### API key errors
+
+If sync or ask commands fail with authentication errors:
+
+```bash
+# Verify your key is set
+echo $OPENROUTER_API_KEY
+
+# Re-export if needed
+export OPENROUTER_API_KEY="sk-or-v1-..."
+```
+
+### Port already in use
+
+If port 8765 is occupied:
+
+```bash
+# Use a custom port
+lerim serve --port 9000
+
+# Or stop whatever is using 8765
+lsof -i :8765
+```
+
+### Fresh start
+
+If you need to reset everything:
+
+```bash
+# Reinitialize config (preserves memories)
+lerim init
+
+# Or wipe all data and start over
+lerim memory reset --scope both --yes
+lerim down
+lerim up
+```
+
+!!! warning
+    `lerim memory reset` permanently deletes all memories, workspace data, and session indexes. This cannot be undone.
+
+## Next steps
+
+<div class="grid cards" markdown>
+
+-   :material-rocket-launch: **Quickstart**
+
+    ---
+
+    Complete the 5-minute quickstart guide
+
+    [:octicons-arrow-right-24: Quickstart](quickstart.md)
+
+-   :material-cog: **Configuration**
+
+    ---
+
+    Customize model providers, tracing, and more
+
+    [:octicons-arrow-right-24: Configuration](configuration/overview.md)
+
+</div>

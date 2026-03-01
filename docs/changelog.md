@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.53] - 2026-03-01
+
+### Fixed
+
+- Daemon loop: maintain never triggered on startup in Docker containers where `time.monotonic()` reflected VM uptime smaller than the maintain interval (60 min).
+- Daemon loop: sync/maintain cycles produced zero log output, making `lerim logs` appear idle. Added per-cycle status logging.
+- Session queue: NULL `repo_path` jobs clogged the claim queue, preventing valid sessions from being extracted. Added filter in `claim_session_jobs` and guard in `enqueue_session_job`.
+- DB migration: orphaned NULL `repo_path` pending/failed jobs are now purged on schema init.
+- Explorer subagent: switched from structured `ExplorerEnvelope` output to plain `str` to avoid repeated output-validation failures with models that return empty responses after tool calls.
+- Explorer failures no longer crash the lead agent; the `explore` tool returns empty evidence and logs a warning.
+- Maintain action path validation: handle list-valued `source_path`/`target_path` from LLM output (model sometimes returns multiple paths per action).
+- `run_maintain_once` now accepts a `trigger` parameter instead of hardcoding `"manual"` for all service-run records.
+
 ## [0.1.5] - 2026-03-01
 
 ### Added
@@ -31,7 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Infrastructure
 
-- Added `pytest-xdist` for parallel LLM-bound test execution. Smoke, integration, and e2e tests run with `-n auto` (~2x speedup for e2e: 10min → 5min).
+- Added `pytest-xdist` for parallel LLM-bound test execution. Smoke, integration, and e2e tests run with `-n auto` (~2x speedup for e2e: 10min to 5min).
 - Test runner defaults updated to match `default.toml` models (`x-ai/grok-4.1-fast` lead/explorer, `openai/gpt-5-nano` extract/summarize).
 
 ## [0.1.1] - 2026-02-28

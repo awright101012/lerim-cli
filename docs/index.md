@@ -1,38 +1,237 @@
 ---
 hide:
   - navigation
+  - toc
 ---
+
+<div class="hero" markdown>
 
 # Lerim
 
-**Continual learning layer for coding agents**
+**Your coding agents forget everything after each session. Lerim remembers — across all of them.**
 
 <p align="center">
-  <img src="../assets/lerim.png" alt="Lerim Logo" width="160">
+  <img src="assets/lerim.png" alt="Lerim Logo" width="160">
 </p>
 
-Lerim gives coding agents persistent memory across sessions. It watches your agent conversations (Claude Code, Codex, Cursor, OpenCode, ...), extracts decisions and learnings, and stores them as plain markdown files that both humans and agents can read.
-
-Memories are refined offline over time through merging, deduplication, archiving, and decay-based forgetting.
+Lerim is a **continual learning layer** that gives coding agents persistent, shared memory across sessions and platforms. Use Claude Code, Cursor, Codex, and OpenCode on the same project — Lerim unifies their knowledge into one memory store that every agent can query.
 
 <p align="center">
-  <img src="../assets/agent-network.gif" alt="Lerim network animation" width="450">
+  <img src="assets/agent-network.gif" alt="Lerim network animation" width="450">
 </p>
+
+</div>
+
+---
+
+## The problem
+
+You spend 20 minutes explaining context to your coding agent. It writes great code. Next session? It's forgotten everything. Every decision, every pattern, every "we tried X and it didn't work" — gone.
+
+And if you use multiple agents — Claude Code at the terminal, Cursor in the IDE, Codex for reviews — none of them know what the others learned. Your project knowledge is **scattered across isolated sessions with no shared memory**.
+
+This is **agent context amnesia**, and it's the biggest productivity drain in AI-assisted development.
+
+## The solution
+
+Lerim solves this by:
+
+- :material-sync: **Watching** your agent sessions across Claude Code, Codex CLI, Cursor, and OpenCode
+- :material-brain: **Extracting** decisions and learnings automatically using LLM pipelines
+- :material-file-document: **Storing** everything as plain markdown files in your repo (`.lerim/`)
+- :material-refresh: **Refining** memories continuously — merges duplicates, archives stale entries, applies time-based decay
+- :material-share-variant: **Unifying** knowledge across all your agents — what Cursor learns, Claude Code can recall
+- :material-chat-question: **Answering** questions about past context: `lerim ask "why did we choose Postgres?"`
+
+No proprietary format. No database lock-in. Just markdown files that both humans and agents can read.
+
+---
+
+## Get started
+
+<div class="grid cards" markdown>
+
+-   :material-rocket-launch:{ .lg .middle } **Quickstart**
+
+    ---
+
+    Get from zero to first working command in under 5 minutes
+
+    [:octicons-arrow-right-24: Quickstart](quickstart.md)
+
+-   :material-download:{ .lg .middle } **Installation**
+
+    ---
+
+    Detailed installation instructions and prerequisites
+
+    [:octicons-arrow-right-24: Installation](installation.md)
+
+-   :material-console:{ .lg .middle } **CLI Reference**
+
+    ---
+
+    Complete command-line interface documentation
+
+    [:octicons-arrow-right-24: CLI Reference](cli/overview.md)
+
+-   :material-sitemap:{ .lg .middle } **Architecture**
+
+    ---
+
+    How Lerim works under the hood
+
+    [:octicons-arrow-right-24: Architecture](architecture/overview.md)
+
+</div>
+
+---
+
+## Key features
+
+<div class="feature-grid" markdown>
+
+<div class="feature-item" markdown>
+
+#### :material-account-group: Multi-agent support
+
+Works with Claude Code, Cursor, Codex CLI, and OpenCode
+
+</div>
+
+<div class="feature-item" markdown>
+
+#### :material-file-document-outline: Plain markdown storage
+
+No proprietary formats — just `.md` files in `.lerim/`
+
+</div>
+
+<div class="feature-item" markdown>
+
+#### :material-auto-fix: Automatic extraction
+
+LLM pipelines extract decisions and learnings from sessions
+
+</div>
+
+<div class="feature-item" markdown>
+
+#### :material-refresh: Continuous refinement
+
+Merges duplicates, archives stale entries, applies time decay
+
+</div>
+
+<div class="feature-item" markdown>
+
+#### :material-chat-question-outline: Natural language queries
+
+Ask questions about past context in plain English
+
+</div>
+
+<div class="feature-item" markdown>
+
+#### :material-laptop: Local-first
+
+Runs entirely on your machine with Docker or standalone
+
+</div>
+
+</div>
+
+---
+
+## Supported agents
+
+| Agent | Session Format | Status |
+|-------|---------------|--------|
+| Claude Code | JSONL traces | :material-check-circle:{ style="color: #4caf50" } Supported |
+| Codex CLI | JSONL traces | :material-check-circle:{ style="color: #4caf50" } Supported |
+| Cursor | SQLite to JSONL | :material-check-circle:{ style="color: #4caf50" } Supported |
+| OpenCode | SQLite to JSONL | :material-check-circle:{ style="color: #4caf50" } Supported |
+
+!!! tip "More agents coming soon"
+    PRs welcome! See the [contributing guide](contributing/getting-started.md) to add support for your favorite agent.
+
+---
 
 ## How it works
 
-1. **Connect** your coding agent platforms
-2. **Sync** — Lerim reads session transcripts, extracts decisions and learnings via DSPy pipelines
-3. **Maintain** — offline refinement merges duplicates, archives low-value entries, applies time-based decay
-4. **Query** — ask Lerim for relevant past context at any time
+<div class="steps" markdown>
 
-## Key design principles
+<div class="step" markdown>
 
-- **File-first** — memories are markdown files with YAML frontmatter, readable by humans and agents
-- **Primitive-first** — two core types: `decisions` and `learnings`, plus episodic `summaries`
-- **Project-scoped** — project memory at `<repo>/.lerim/`, global fallback at `~/.lerim/`
-- **No index required** — default search scans files directly; FTS/vector/graph are optional accelerators
-- **Source-available** — BSL 1.1 license, free for individual developers
+### Connect your agents
+
+Link your coding agent platforms. Lerim auto-detects Claude Code, Codex, Cursor, and OpenCode.
+
+```bash
+lerim init
+lerim connect auto
+```
+
+</div>
+
+<div class="step" markdown>
+
+### Sync sessions
+
+Lerim reads session transcripts, extracts decisions and learnings via DSPy pipelines, and writes them as markdown files.
+
+<p align="center">
+  <img src="assets/sync.png" alt="Sync path diagram" width="700">
+</p>
+
+</div>
+
+<div class="step" markdown>
+
+### Maintain memories
+
+Offline refinement merges duplicates, archives low-value entries, consolidates related memories, and applies time-based decay.
+
+<p align="center">
+  <img src="assets/maintain.png" alt="Maintain path diagram" width="700">
+</p>
+
+</div>
+
+<div class="step" markdown>
+
+### Query past context
+
+Ask Lerim about any past decision or learning. Your agents can do this too.
+
+```bash
+lerim ask "Why did we choose Postgres over MongoDB?"
+lerim memory search "authentication"
+```
+
+</div>
+
+</div>
+
+---
+
+## Dashboard
+
+Lerim includes a local web UI for session analytics, memory browsing, and runtime status.
+
+<p align="center">
+  <img src="assets/dashboard.png" alt="Lerim dashboard" width="1100">
+</p>
+
+Access it at `http://localhost:8765` after running `lerim up` or `lerim serve`.
+
+- **Overview** — High-level metrics and charts for sessions, messages, tools, errors, and tokens
+- **Runs** — Searchable session list with full-screen chat viewer
+- **Memories** — Library and editor for memory records with filters
+- **Pipeline** — Sync/maintain status and extraction queue state
+- **Settings** — Dashboard-editable config for server, model roles, and tracing
+
+---
 
 ## Quick install
 
@@ -40,10 +239,44 @@ Memories are refined offline over time through merging, deduplication, archiving
 pip install lerim
 ```
 
-Then [get started](getting-started.md) in under 2 minutes.
+Then follow the [quickstart guide](quickstart.md) to get running in 5 minutes.
 
-## Links
+---
 
-- [PyPI](https://pypi.org/project/lerim/)
-- [GitHub](https://github.com/lerim-dev/lerim-cli)
-- [lerim.dev](https://lerim.dev)
+## Next steps
+
+<div class="grid cards" markdown>
+
+-   :material-play-circle:{ .lg .middle } **Quickstart**
+
+    ---
+
+    Install, configure, and run your first sync in 5 minutes
+
+    [:octicons-arrow-right-24: Get started](quickstart.md)
+
+-   :material-connection:{ .lg .middle } **Connecting agents**
+
+    ---
+
+    Link your coding agent platforms for session ingestion
+
+    [:octicons-arrow-right-24: Connect agents](guides/connecting-agents.md)
+
+-   :material-database:{ .lg .middle } **Memory model**
+
+    ---
+
+    Understand how memories are stored and structured
+
+    [:octicons-arrow-right-24: Memory model](concepts/memory-model.md)
+
+-   :material-cog:{ .lg .middle } **Configuration**
+
+    ---
+
+    Customize model providers, tracing, and more
+
+    [:octicons-arrow-right-24: Configuration](configuration/overview.md)
+
+</div>
