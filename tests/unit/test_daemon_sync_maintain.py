@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from lerim.app import daemon
-from lerim.app.activity_log import ACTIVITY_LOG_PATH, log_activity
+from lerim.app.activity_log import log_activity
 from lerim.config.settings import reload_config
 from lerim.sessions import catalog
 from tests.helpers import make_config, write_test_config

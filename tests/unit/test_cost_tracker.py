@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 from lerim.runtime.cost_tracker import (
-    _Acc,
     _run_cost,
     add_cost,
     build_tracked_async_client,
