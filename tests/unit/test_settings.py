@@ -262,7 +262,7 @@ def test_save_config_patch_deep_merges(tmp_path, monkeypatch):
 def test_layer_precedence_explicit_overrides(tmp_path, monkeypatch):
     """LERIM_CONFIG env var layer overrides all other layers."""
     explicit = tmp_path / "explicit.toml"
-    explicit.write_text('[server]\nport = 1234\n', encoding="utf-8")
+    explicit.write_text("[server]\nport = 1234\n", encoding="utf-8")
     monkeypatch.setenv("LERIM_CONFIG", str(explicit))
     cfg = reload_config()
     assert cfg.server_port == 1234
@@ -292,7 +292,7 @@ def test_deep_merge_replaces_non_dict_with_dict():
 def test_port_over_65535_resets(tmp_path, monkeypatch):
     """Port > 65535 resets to default 8765."""
     explicit = tmp_path / "bad_port.toml"
-    explicit.write_text('[server]\nport = 99999\n', encoding="utf-8")
+    explicit.write_text("[server]\nport = 99999\n", encoding="utf-8")
     monkeypatch.setenv("LERIM_CONFIG", str(explicit))
     cfg = reload_config()
     assert cfg.server_port == 8765
@@ -306,7 +306,12 @@ def test_port_over_65535_resets(tmp_path, monkeypatch):
 def test_llm_role_explicit_overrides():
     """_build_llm_role uses explicit values over defaults."""
     role = _build_llm_role(
-        {"provider": "anthropic", "model": "claude-3", "timeout_seconds": 600},
+        {
+            "provider": "anthropic",
+            "model": "claude-3",
+            "timeout_seconds": 600,
+            "max_iterations": 10,
+        },
         default_provider="openrouter",
         default_model="default-model",
     )
@@ -316,43 +321,55 @@ def test_llm_role_explicit_overrides():
 
 
 def test_llm_role_timeout_minimum():
-    """_build_llm_role enforces minimum timeout of 30s."""
+    """_build_llm_role enforces minimum timeout of 10s."""
     role = _build_llm_role(
-        {"timeout_seconds": 5},
+        {"timeout_seconds": 5, "max_iterations": 10},
         default_provider="openrouter",
         default_model="m",
     )
-    assert role.timeout_seconds == 30
+    assert role.timeout_seconds == 10
 
 
-def test_dspy_role_sub_defaults_to_main():
-    """_build_dspy_role sub_provider/sub_model default to main provider/model."""
+def test_dspy_role_windowing_required():
+    """_build_dspy_role raises when windowing config keys are missing."""
+    import pytest
+
+    with pytest.raises(
+        ValueError, match="missing required config key: max_window_tokens"
+    ):
+        _build_dspy_role(
+            {"provider": "ollama", "model": "qwen3:8b", "timeout_seconds": 180},
+            default_provider="openrouter",
+            default_model="default",
+        )
+
+
+def test_dspy_role_explicit_windowing():
+    """_build_dspy_role uses explicit windowing values when set."""
     role = _build_dspy_role(
-        {"provider": "ollama", "model": "qwen3:8b"},
+        {
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "timeout_seconds": 180,
+            "max_window_tokens": 50000,
+            "window_overlap_tokens": 2000,
+        },
         default_provider="openrouter",
         default_model="default",
     )
-    assert role.sub_provider == "ollama"
-    assert role.sub_model == "qwen3:8b"
+    assert role.max_window_tokens == 50000
+    assert role.window_overlap_tokens == 2000
 
 
-def test_dspy_role_explicit_sub():
-    """_build_dspy_role uses explicit sub_provider/sub_model when set."""
+def test_dspy_role_max_window_tokens_minimum():
+    """_build_dspy_role enforces minimum max_window_tokens of 1000."""
     role = _build_dspy_role(
-        {"provider": "ollama", "model": "qwen3:8b",
-         "sub_provider": "openrouter", "sub_model": "cheap-model"},
-        default_provider="openrouter",
-        default_model="default",
-    )
-    assert role.sub_provider == "openrouter"
-    assert role.sub_model == "cheap-model"
-
-
-def test_dspy_role_max_llm_calls_minimum():
-    """_build_dspy_role enforces minimum max_llm_calls of 1."""
-    role = _build_dspy_role(
-        {"max_llm_calls": -5},
+        {
+            "timeout_seconds": 180,
+            "max_window_tokens": -5,
+            "window_overlap_tokens": 5000,
+        },
         default_provider="ollama",
         default_model="m",
     )
-    assert role.max_llm_calls == 1
+    assert role.max_window_tokens == 1000

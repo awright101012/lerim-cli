@@ -38,12 +38,14 @@ def _configure_dspy_from_eval(config: dict) -> None:
 
     from lerim.config.settings import reload_config, save_config_patch
 
-    patch = {"roles": {"summarize": {
-        "provider": section.get("provider", "openrouter"),
-        "model": section.get("model", "qwen/qwen3-coder-30b-a3b-instruct"),
-        "sub_provider": section.get("sub_provider", section.get("provider", "openrouter")),
-        "sub_model": section.get("sub_model", section.get("model", "qwen/qwen3-coder-30b-a3b-instruct")),
-    }}}
+    patch = {
+        "roles": {
+            "summarize": {
+                "provider": section.get("provider", "openrouter"),
+                "model": section.get("model", "qwen/qwen3-coder-30b-a3b-instruct"),
+            }
+        }
+    }
     save_config_patch(patch)
     reload_config()
 
@@ -77,9 +79,13 @@ def run_summarization_eval(config_path: Path) -> dict:
             output = summarize_trace_from_session_file(trace_path)
         except Exception as e:
             print(f"    Pipeline error: {e}")
-            per_trace.append(EvalScore(
-                trace=trace_path.name, schema_ok=False, judge_reasoning=str(e),
-            ).__dict__)
+            per_trace.append(
+                EvalScore(
+                    trace=trace_path.name,
+                    schema_ok=False,
+                    judge_reasoning=str(e),
+                ).__dict__
+            )
             continue
 
         wall_time = time.time() - t0
@@ -117,7 +123,9 @@ def run_summarization_eval(config_path: Path) -> dict:
             judge_reasoning=reasoning,
         )
         per_trace.append(score.__dict__)
-        print(f"    fields={fields_ok} limits={limits_ok} composite={composite:.2f} time={wall_time:.1f}s")
+        print(
+            f"    fields={fields_ok} limits={limits_ok} composite={composite:.2f} time={wall_time:.1f}s"
+        )
 
     total_wall = time.time() - total_start
 
@@ -127,7 +135,9 @@ def run_summarization_eval(config_path: Path) -> dict:
         k: round(sum(t.get(k, 0) for t in per_trace) / n, 3)
         for k in ("completeness", "faithfulness", "clarity", "composite", "wall_time_s")
     }
-    agg["fields_present"] = round(sum(1 for t in per_trace if t.get("fields_present")) / n, 3)
+    agg["fields_present"] = round(
+        sum(1 for t in per_trace if t.get("fields_present")) / n, 3
+    )
     agg["word_limits"] = round(sum(1 for t in per_trace if t.get("word_limits")) / n, 3)
 
     summarization_cfg = config.get("summarization", {})
@@ -149,27 +159,37 @@ def run_summarization_eval(config_path: Path) -> dict:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     out_path = RESULTS_DIR / f"summarization_{ts}.json"
-    out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    out_path.write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     print(f"\nResults saved to: {out_path}")
 
     # Print summary table
-    print(f"\n{'Trace':<40} {'Fields':>6} {'Limit':>5} {'Compl':>6} {'Faith':>6} {'Clar':>6} {'COMP':>6} {'Time':>6}")
+    print(
+        f"\n{'Trace':<40} {'Fields':>6} {'Limit':>5} {'Compl':>6} {'Faith':>6} {'Clar':>6} {'COMP':>6} {'Time':>6}"
+    )
     print("-" * 90)
     for t in per_trace:
-        print(f"{t['trace']:<40} {'ok' if t.get('fields_present') else 'FAIL':>6} "
-              f"{'ok' if t.get('word_limits') else 'FAIL':>5} "
-              f"{t['completeness']:>6.2f} {t['faithfulness']:>6.2f} {t['clarity']:>6.2f} "
-              f"{t['composite']:>6.2f} {t['wall_time_s']:>5.1f}s")
+        print(
+            f"{t['trace']:<40} {'ok' if t.get('fields_present') else 'FAIL':>6} "
+            f"{'ok' if t.get('word_limits') else 'FAIL':>5} "
+            f"{t['completeness']:>6.2f} {t['faithfulness']:>6.2f} {t['clarity']:>6.2f} "
+            f"{t['composite']:>6.2f} {t['wall_time_s']:>5.1f}s"
+        )
     print("-" * 90)
-    print(f"{'AVERAGE':<40} {agg['fields_present']:>6.2f} {agg['word_limits']:>5.2f} "
-          f"{agg['completeness']:>6.2f} {agg['faithfulness']:>6.2f} {agg['clarity']:>6.2f} "
-          f"{agg['composite']:>6.2f} {agg['wall_time_s']:>5.1f}s")
+    print(
+        f"{'AVERAGE':<40} {agg['fields_present']:>6.2f} {agg['word_limits']:>5.2f} "
+        f"{agg['completeness']:>6.2f} {agg['faithfulness']:>6.2f} {agg['clarity']:>6.2f} "
+        f"{agg['composite']:>6.2f} {agg['wall_time_s']:>5.1f}s"
+    )
 
     return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run summarization eval")
-    parser.add_argument("--config", default="evals/eval_config.toml", help="Path to eval config TOML")
+    parser.add_argument(
+        "--config", default="evals/eval_config.toml", help="Path to eval config TOML"
+    )
     args = parser.parse_args()
     run_summarization_eval(Path(args.config))

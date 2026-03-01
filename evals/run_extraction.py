@@ -42,12 +42,14 @@ def _configure_dspy_from_eval(config: dict) -> None:
     # Patch lerim config by writing a temporary override config
     from lerim.config.settings import reload_config, save_config_patch
 
-    patch = {"roles": {"extract": {
-        "provider": section.get("provider", "openrouter"),
-        "model": section.get("model", "qwen/qwen3-coder-30b-a3b-instruct"),
-        "sub_provider": section.get("sub_provider", section.get("provider", "openrouter")),
-        "sub_model": section.get("sub_model", section.get("model", "qwen/qwen3-coder-30b-a3b-instruct")),
-    }}}
+    patch = {
+        "roles": {
+            "extract": {
+                "provider": section.get("provider", "openrouter"),
+                "model": section.get("model", "qwen/qwen3-coder-30b-a3b-instruct"),
+            }
+        }
+    }
     save_config_patch(patch)
     reload_config()
 
@@ -81,9 +83,13 @@ def run_extraction_eval(config_path: Path) -> dict:
             output = extract_memories_from_session_file(trace_path)
         except Exception as e:
             print(f"    Pipeline error: {e}")
-            per_trace.append(EvalScore(
-                trace=trace_path.name, schema_ok=False, judge_reasoning=str(e),
-            ).__dict__)
+            per_trace.append(
+                EvalScore(
+                    trace=trace_path.name,
+                    schema_ok=False,
+                    judge_reasoning=str(e),
+                ).__dict__
+            )
             continue
 
         wall_time = time.time() - t0
@@ -121,7 +127,9 @@ def run_extraction_eval(config_path: Path) -> dict:
             candidate_count=len(output),
         )
         per_trace.append(score.__dict__)
-        print(f"    schema={schema_ok} candidates={len(output)} composite={composite:.2f} time={wall_time:.1f}s")
+        print(
+            f"    schema={schema_ok} candidates={len(output)} composite={composite:.2f} time={wall_time:.1f}s"
+        )
 
     total_wall = time.time() - total_start
 
@@ -152,26 +160,36 @@ def run_extraction_eval(config_path: Path) -> dict:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     out_path = RESULTS_DIR / f"extraction_{ts}.json"
-    out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    out_path.write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     print(f"\nResults saved to: {out_path}")
 
     # Print summary table
-    print(f"\n{'Trace':<40} {'Schema':>6} {'Cands':>5} {'Compl':>6} {'Faith':>6} {'Clar':>6} {'COMP':>6} {'Time':>6}")
+    print(
+        f"\n{'Trace':<40} {'Schema':>6} {'Cands':>5} {'Compl':>6} {'Faith':>6} {'Clar':>6} {'COMP':>6} {'Time':>6}"
+    )
     print("-" * 90)
     for t in per_trace:
-        print(f"{t['trace']:<40} {'ok' if t['schema_ok'] else 'FAIL':>6} {t.get('candidate_count', 0):>5} "
-              f"{t['completeness']:>6.2f} {t['faithfulness']:>6.2f} {t['clarity']:>6.2f} "
-              f"{t['composite']:>6.2f} {t['wall_time_s']:>5.1f}s")
+        print(
+            f"{t['trace']:<40} {'ok' if t['schema_ok'] else 'FAIL':>6} {t.get('candidate_count', 0):>5} "
+            f"{t['completeness']:>6.2f} {t['faithfulness']:>6.2f} {t['clarity']:>6.2f} "
+            f"{t['composite']:>6.2f} {t['wall_time_s']:>5.1f}s"
+        )
     print("-" * 90)
-    print(f"{'AVERAGE':<40} {agg['schema_ok']:>6.2f} {'':>5} "
-          f"{agg['completeness']:>6.2f} {agg['faithfulness']:>6.2f} {agg['clarity']:>6.2f} "
-          f"{agg['composite']:>6.2f} {agg['wall_time_s']:>5.1f}s")
+    print(
+        f"{'AVERAGE':<40} {agg['schema_ok']:>6.2f} {'':>5} "
+        f"{agg['completeness']:>6.2f} {agg['faithfulness']:>6.2f} {agg['clarity']:>6.2f} "
+        f"{agg['composite']:>6.2f} {agg['wall_time_s']:>5.1f}s"
+    )
 
     return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run extraction eval")
-    parser.add_argument("--config", default="evals/eval_config.toml", help="Path to eval config TOML")
+    parser.add_argument(
+        "--config", default="evals/eval_config.toml", help="Path to eval config TOML"
+    )
     args = parser.parse_args()
     run_extraction_eval(Path(args.config))

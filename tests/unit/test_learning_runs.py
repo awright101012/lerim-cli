@@ -89,8 +89,8 @@ def test_queue_fail_marks_failed_before_dead_letter(tmp_path, monkeypatch):
     assert row["status"] == "failed"
 
 
-def test_claim_newest_first(tmp_path, monkeypatch):
-    """Jobs with newer start_time should be claimed first."""
+def test_claim_oldest_first(tmp_path, monkeypatch):
+    """Jobs with older start_time should be claimed first (chronological order)."""
     _setup(tmp_path, monkeypatch)
     catalog.enqueue_session_job("old-run", start_time="2026-01-01T00:00:00+00:00")
     catalog.enqueue_session_job("new-run", start_time="2026-02-20T12:00:00+00:00")
@@ -98,7 +98,7 @@ def test_claim_newest_first(tmp_path, monkeypatch):
 
     claimed = catalog.claim_session_jobs(limit=1)
     assert len(claimed) == 1
-    assert claimed[0]["run_id"] == "new-run", "should claim newest session first"
+    assert claimed[0]["run_id"] == "old-run", "should claim oldest session first"
 
     claimed2 = catalog.claim_session_jobs(limit=1)
     assert claimed2[0]["run_id"] == "mid-run", "second claim should get middle session"

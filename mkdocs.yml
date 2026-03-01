@@ -80,6 +80,7 @@ nav:
       - Memory Model: memory-model.md
       - Dashboard: dashboard.md
   - Architecture: architecture.md
+  - Evaluation: evals.md
   - Development:
       - Contributing: contributing.md
       - Coding Rules: simple-coding-rules.md

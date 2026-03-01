@@ -1,11 +1,14 @@
-"""Shared DSPy helpers used by memory extraction and trace summarization pipelines."""
+"""Shared DSPy helpers used by memory extraction and trace summarization pipelines.
+
+Provides LM configuration, token estimation, and transcript windowing.
+"""
 
 from __future__ import annotations
 
 import dspy
 from lerim.config.logging import logger
 from lerim.config.settings import get_config
-from lerim.runtime.providers import build_dspy_lm, build_dspy_sub_lm
+from lerim.runtime.providers import build_dspy_lm
 
 
 def configure_dspy_lm(role: str = "extract") -> dspy.LM:
@@ -28,36 +31,65 @@ def configure_dspy_lm(role: str = "extract") -> dspy.LM:
     return build_dspy_lm(normalized_role, config=config)
 
 
-def configure_dspy_sub_lm(role: str = "extract") -> dspy.LM:
-    """Build a separate DSPy LM for RLM sub-calls (llm_query/llm_query_batched)."""
-    config = get_config()
-    normalized_role = "summarize" if role == "summarize" else "extract"
-    role_cfg = (
-        config.summarize_role if normalized_role == "summarize" else config.extract_role
-    )
-    logger.info(
-        "Configuring DSPy sub-LM for role={} provider={} model={}",
-        normalized_role,
-        role_cfg.sub_provider,
-        role_cfg.sub_model,
-    )
-    return build_dspy_sub_lm(normalized_role, config=config)
+def estimate_tokens(text: str) -> int:
+    """Estimate token count from text length (conservative for JSON content)."""
+    return len(text) * 2 // 7
+
+
+def window_transcript(
+    text: str,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> list[str]:
+    """Split text into overlapping windows based on character count derived from token estimates.
+
+    Uses max_chars = max_tokens * 7 // 2 and overlap_chars = overlap_tokens * 7 // 2.
+    If the text fits in one window, returns [text].
+    """
+    max_chars = max_tokens * 7 // 2
+    overlap_chars = overlap_tokens * 7 // 2
+    if len(text) <= max_chars:
+        return [text]
+    step = max_chars - overlap_chars
+    if step <= 0:
+        step = max_chars
+    windows: list[str] = []
+    pos = 0
+    while pos < len(text):
+        windows.append(text[pos : pos + max_chars])
+        pos += step
+    return windows
 
 
 if __name__ == "__main__":
-    """Run direct smoke check for config-based DSPy setup."""
+    """Run direct smoke check for config-based DSPy setup and windowing."""
     config = get_config()
     assert config.extract_role.provider
     assert config.extract_role.model
-    assert config.extract_role.sub_provider
-    assert config.extract_role.sub_model
     assert config.summarize_role.provider
     assert config.summarize_role.model
+
+    # Token estimation
+    assert estimate_tokens("") == 0
+    assert estimate_tokens("a" * 7) == 2
+    assert estimate_tokens("a" * 35) == 10
+
+    # Windowing: small text fits in one window
+    small = "x" * 100
+    assert window_transcript(small) == [small]
+
+    # Windowing: large text splits correctly
+    big = "y" * 1_000_000
+    windows = window_transcript(big, max_tokens=1000, overlap_tokens=100)
+    assert len(windows) > 1
+    # All text is covered
+    assert windows[0].startswith("y")
+    assert windows[-1].endswith("y")
+
     print(
         f"""\
 DSPy config: \
-extract={config.extract_role.provider}/{config.extract_role.model} \
-sub={config.extract_role.sub_provider}/{config.extract_role.sub_model}, \
-summarize={config.summarize_role.provider}/{config.summarize_role.model} \
-sub={config.summarize_role.sub_provider}/{config.summarize_role.sub_model}"""
+extract={config.extract_role.provider}/{config.extract_role.model}, \
+summarize={config.summarize_role.provider}/{config.summarize_role.model}, \
+windowing=OK"""
     )

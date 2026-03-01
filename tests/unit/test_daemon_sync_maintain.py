@@ -1,10 +1,11 @@
-"""Test daemon sync and maintain paths."""
+"""Test daemon sync and maintain paths, and activity log."""
 
 from __future__ import annotations
 
 import time
 
 from lerim.app import daemon
+from lerim.app.activity_log import ACTIVITY_LOG_PATH, log_activity
 from lerim.config.settings import reload_config
 from lerim.sessions import catalog
 from tests.helpers import make_config, write_test_config
@@ -119,13 +120,13 @@ def test_sync_force_enqueues_changed_sessions(monkeypatch, tmp_path) -> None:
 
 
 def test_maintain_calls_agent(monkeypatch, tmp_path) -> None:
-    """Maintain flow calls LerimAgent.maintain() and returns result."""
+    """Maintain flow calls LerimAgent.maintain() for each registered project."""
     _setup(tmp_path, monkeypatch)
-    called = []
+    called: list[str] = []
     monkeypatch.setattr(
         "lerim.runtime.agent.LerimAgent.maintain",
         lambda self, **kw: (
-            called.append(True),
+            called.append(kw.get("memory_root", "")),
             {
                 "counts": {
                     "merged": 0,
@@ -138,7 +139,9 @@ def test_maintain_calls_agent(monkeypatch, tmp_path) -> None:
     )
     code, payload = daemon.run_maintain_once(force=False, dry_run=False)
     assert code == daemon.EXIT_OK
-    assert len(called) == 1
+    assert len(called) >= 1
+    # Each call should pass an explicit memory_root.
+    assert all(r for r in called)
 
 
 def test_config_has_separate_interval_fields(tmp_path) -> None:
@@ -209,3 +212,20 @@ def test_daemon_sync_runs_more_often_than_maintain(monkeypatch, tmp_path) -> Non
     assert sync_count > maintain_count, (
         f"sync ({sync_count}) should run more often than maintain ({maintain_count})"
     )
+
+
+def test_log_activity_appends_line(tmp_path, monkeypatch) -> None:
+    """log_activity writes one formatted line per call."""
+    log_file = tmp_path / "activity.log"
+    monkeypatch.setattr("lerim.app.activity_log.ACTIVITY_LOG_PATH", log_file)
+
+    log_activity("sync", "myproject", "3 new, 1 updated, 2 sessions", 4.2)
+    log_activity("maintain", "myproject", "2 archived, 1 merged", 6.15)
+
+    lines = log_file.read_text().splitlines()
+    assert len(lines) == 2
+    assert (
+        "| sync     | myproject | 3 new, 1 updated, 2 sessions | $0.0000 | 4.2s"
+        in lines[0]
+    )
+    assert "| maintain | myproject | 2 archived, 1 merged | $0.0000 | 6.2s" in lines[1]

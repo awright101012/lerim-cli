@@ -84,7 +84,7 @@ tests/
   e2e/            # Full CLI flows (LERIM_E2E=1)
 ```
 
-Test selection is directory-based: `pytest tests/unit/` runs only unit tests. See `tests/README.md` for full details.
+Test selection is directory-based: `pytest tests/unit/` runs only unit tests. Smoke, integration, and e2e tests run in parallel via `pytest-xdist` (`-n auto`). See `tests/README.md` for full details.
 
 ## Pull request checklist
 

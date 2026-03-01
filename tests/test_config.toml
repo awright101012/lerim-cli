@@ -1,43 +1,37 @@
 # Test-only config for smoke / integration / e2e tests.
-# Defaults to openrouter with qwen3-coder-30b for all roles.
+# Mirrors production default.toml roles with global_only scope.
 #
 # Override via env vars:
-#   LERIM_TEST_PROVIDER  — provider for all roles (default: openrouter)
-#   LERIM_TEST_MODEL     — model for all roles (default: qwen/qwen3-coder-30b-a3b-instruct)
+#   LERIM_TEST_PROVIDER  — provider for all roles
+#   LERIM_TEST_MODEL     — model for all roles
 
 [memory]
 scope = "global_only"
 
 [roles.lead]
 provider = "openrouter"
-model = "qwen/qwen3-coder-30b-a3b-instruct"
+model = "x-ai/grok-4.1-fast"
 timeout_seconds = 300
-max_iterations = 24
-openrouter_provider_order = ["nebius"]
+max_iterations = 10
 
 [roles.explorer]
 provider = "openrouter"
-model = "qwen/qwen3-coder-30b-a3b-instruct"
+model = "x-ai/grok-4.1-fast"
 timeout_seconds = 180
-max_iterations = 16
-openrouter_provider_order = ["nebius"]
+max_iterations = 8
 
 [roles.extract]
 provider = "openrouter"
-model = "qwen/qwen3-coder-30b-a3b-instruct"
-sub_provider = "openrouter"
-sub_model = "qwen/qwen3-coder-30b-a3b-instruct"
+model = "openai/gpt-5-nano"
+fallback_models = ["x-ai/grok-4.1-fast"]
 timeout_seconds = 180
-max_iterations = 24
-max_llm_calls = 24
-openrouter_provider_order = ["nebius"]
+max_window_tokens = 300000
+window_overlap_tokens = 5000
 
 [roles.summarize]
 provider = "openrouter"
-model = "qwen/qwen3-coder-30b-a3b-instruct"
-sub_provider = "openrouter"
-sub_model = "qwen/qwen3-coder-30b-a3b-instruct"
+model = "openai/gpt-5-nano"
+fallback_models = ["x-ai/grok-4.1-fast"]
 timeout_seconds = 180
-max_iterations = 24
-max_llm_calls = 24
-openrouter_provider_order = ["nebius"]
+max_window_tokens = 300000
+window_overlap_tokens = 5000

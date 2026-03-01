@@ -3,7 +3,7 @@
 Lerim includes a local web dashboard for session analytics, memory browsing, and runtime status.
 
 <p align="center">
-  <img src="assets/dashboard.png" alt="Lerim dashboard" width="1100">
+  <img src="../assets/dashboard.png" alt="Lerim dashboard" width="1100">
 </p>
 
 ## Launch

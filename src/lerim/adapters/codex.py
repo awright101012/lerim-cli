@@ -237,4 +237,5 @@ def iter_sessions(
                 content_hash=file_hash,
             )
         )
+    records.sort(key=lambda r: r.start_time or "")
     return records

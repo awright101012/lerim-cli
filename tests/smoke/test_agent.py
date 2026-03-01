@@ -15,8 +15,8 @@ _skip = pytest.mark.skipif(
 
 
 @_skip
-def test_agent_chat_responds(tmp_path):
-    """LerimAgent.chat() returns non-empty string for simple query."""
+def test_agent_ask_responds(tmp_path):
+    """LerimAgent.ask() returns non-empty string for simple query."""
     from lerim.runtime.agent import LerimAgent
 
     # Seed memory with one fixture file
@@ -27,9 +27,10 @@ def test_agent_chat_responds(tmp_path):
         encoding="utf-8",
     )
     agent = LerimAgent()
-    response, session_id = agent.chat(
+    response, session_id, cost_usd = agent.ask(
         "What decisions have been made?",
         memory_root=tmp_path,
     )
+    assert isinstance(cost_usd, float)
     assert isinstance(response, str)
     assert len(response) > 0

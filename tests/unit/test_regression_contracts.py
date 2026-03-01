@@ -16,6 +16,7 @@ def test_sync_result_contract_fields():
         "counts",
         "written_memory_paths",
         "summary_path",
+        "cost_usd",
     }
     assert set(SyncResultContract.model_fields.keys()) == expected
 
@@ -24,7 +25,14 @@ def test_maintain_result_contract_fields():
     """MaintainResultContract has exactly these fields."""
     from lerim.runtime.agent import MaintainResultContract
 
-    expected = {"memory_root", "workspace_root", "run_folder", "artifacts", "counts"}
+    expected = {
+        "memory_root",
+        "workspace_root",
+        "run_folder",
+        "artifacts",
+        "counts",
+        "cost_usd",
+    }
     assert set(MaintainResultContract.model_fields.keys()) == expected
 
 

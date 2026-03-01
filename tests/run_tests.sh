@@ -29,8 +29,7 @@ Options:
   --agent-model MODEL
   --agent-fallback-provider PROVIDER
   --agent-fallback-model MODEL
-  --embeddings-provider PROVIDER
-  --embeddings-model MODEL
+
 
 Environment overrides are also supported (e.g. LERIM_LLM_PROVIDER).
 USAGE
@@ -66,19 +65,16 @@ fi
 shift || true
 
 LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
-LLM_MODEL=${LLM_MODEL:-qwen/qwen3-coder-30b-a3b-instruct}
+LLM_MODEL=${LLM_MODEL:-openai/gpt-5-nano}
 LLM_BASE_URL=${LLM_BASE_URL:-}
 LLM_FALLBACK_PROVIDER=${LLM_FALLBACK_PROVIDER:-openrouter}
-LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen/qwen3-coder-30b-a3b-instruct}
+LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-x-ai/grok-4.1-fast}
 LLM_FALLBACK_BASE_URL=${LLM_FALLBACK_BASE_URL:-}
 
 AGENT_PROVIDER=${AGENT_PROVIDER:-openrouter}
-AGENT_MODEL=${AGENT_MODEL:-qwen/qwen3-coder-30b-a3b-instruct}
+AGENT_MODEL=${AGENT_MODEL:-x-ai/grok-4.1-fast}
 AGENT_FALLBACK_PROVIDER=${AGENT_FALLBACK_PROVIDER:-openrouter}
 AGENT_FALLBACK_MODEL=${AGENT_FALLBACK_MODEL:-}
-
-EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-local}
-EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-Alibaba-NLP/gte-modernbert-base}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,10 +98,6 @@ while [[ $# -gt 0 ]]; do
     --agent-fallback-provider=*) AGENT_FALLBACK_PROVIDER="${1#*=}"; shift ;;
     --agent-fallback-model) AGENT_FALLBACK_MODEL="$2"; shift 2 ;;
     --agent-fallback-model=*) AGENT_FALLBACK_MODEL="${1#*=}"; shift ;;
-    --embeddings-provider) EMBEDDINGS_PROVIDER="$2"; shift 2 ;;
-    --embeddings-provider=*) EMBEDDINGS_PROVIDER="${1#*=}"; shift ;;
-    --embeddings-model) EMBEDDINGS_MODEL="$2"; shift 2 ;;
-    --embeddings-model=*) EMBEDDINGS_MODEL="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -127,7 +119,6 @@ print_kv "LLM" "provider=$LLM_PROVIDER model=$LLM_MODEL"
 print_kv "LLM fallback" "provider=$LLM_FALLBACK_PROVIDER model=$LLM_FALLBACK_MODEL"
 print_kv "Agent" "provider=$AGENT_PROVIDER model=$AGENT_MODEL"
 print_kv "Agent fallback" "provider=$AGENT_FALLBACK_PROVIDER model=${AGENT_FALLBACK_MODEL:-default}"
-print_kv "Embeddings" "provider=$EMBEDDINGS_PROVIDER model=$EMBEDDINGS_MODEL"
 
 key_status() {
   local key="$1"
@@ -184,19 +175,19 @@ run_integration() {
   export LERIM_INTEGRATION=1
   export LERIM_LLM_INTEGRATION=1
   export LERIM_EMBEDDINGS_INTEGRATION=1
-  run_pytest_allow_empty tests/integration/
+  run_pytest_allow_empty tests/integration/ -n auto
 }
 
 run_e2e() {
   print_section "End-to-end tests"
   export LERIM_E2E=1
-  run_pytest_allow_empty tests/e2e/
+  run_pytest_allow_empty tests/e2e/ -n auto
 }
 
 run_smoke() {
   print_section "Smoke tests"
   export LERIM_SMOKE=1
-  run_pytest_allow_empty tests/smoke/
+  run_pytest_allow_empty tests/smoke/ -n auto
 }
 
 run_lint() {

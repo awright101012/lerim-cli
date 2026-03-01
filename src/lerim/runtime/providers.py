@@ -13,6 +13,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from lerim.config.settings import Config, DSPyRoleConfig, LLMRoleConfig, get_config
+from lerim.runtime.cost_tracker import build_tracked_async_client
 
 RoleName = Literal["lead", "explorer"]
 DSPyRoleName = Literal["extract", "summarize"]
@@ -87,7 +88,8 @@ def _build_single_orchestration_model(
     provider_name = provider.strip().lower()
     if provider_name == "openrouter":
         provider_obj = OpenRouterProvider(
-            api_key=_api_key_for_provider(config, "openrouter")
+            api_key=_api_key_for_provider(config, "openrouter"),
+            http_client=build_tracked_async_client(),
         )
         settings = None
         if openrouter_provider_order:
@@ -221,24 +223,6 @@ def build_dspy_lm(
         api_base=role_cfg.api_base,
         cfg=cfg,
         role_label=f"roles.{role}.provider={role_cfg.provider}",
-        openrouter_provider_order=role_cfg.openrouter_provider_order,
-    )
-
-
-def build_dspy_sub_lm(
-    role: DSPyRoleName,
-    *,
-    config: Config | None = None,
-) -> dspy.LM:
-    """Build a DSPy sub-LM for RLM sub-calls (llm_query/llm_query_batched)."""
-    cfg = config or get_config()
-    role_cfg = _dspy_role_config(cfg, role)
-    return _build_dspy_lm_for_provider(
-        provider=role_cfg.sub_provider.strip().lower(),
-        model=role_cfg.sub_model,
-        api_base=role_cfg.api_base,
-        cfg=cfg,
-        role_label=f"roles.{role}.sub_provider={role_cfg.sub_provider}",
         openrouter_provider_order=role_cfg.openrouter_provider_order,
     )
 

@@ -12,8 +12,8 @@ from lerim.config.settings import (
     _build_dspy_role,
     _build_llm_role,
     _deep_merge,
-    _to_float,
-    _to_int,
+    _require_float,
+    _require_int,
     _to_non_empty_string,
     ensure_user_config_exists,
     get_config,
@@ -48,20 +48,34 @@ def test_deep_merge_preserves_unset():
     assert result["nested"]["y"] == 20
 
 
-def test_type_conversion_int():
-    """_to_int with valid/invalid/out-of-bounds values."""
-    assert _to_int(42, default=0) == 42
-    assert _to_int("10", default=0) == 10
-    assert _to_int("abc", default=5) == 5
-    assert _to_int(-1, default=0, minimum=0) == 0
+def test_require_int_valid():
+    """_require_int parses valid values and enforces minimum."""
+    assert _require_int({"k": 42}, "k") == 42
+    assert _require_int({"k": "10"}, "k") == 10
+    assert _require_int({"k": -1}, "k", minimum=0) == 0
 
 
-def test_type_conversion_float():
-    """_to_float with valid/invalid/out-of-bounds values."""
-    assert _to_float(0.5, default=0.0, minimum=0.0, maximum=1.0) == 0.5
-    assert _to_float("abc", default=0.3, minimum=0.0, maximum=1.0) == 0.3
-    assert _to_float(2.0, default=0.5, minimum=0.0, maximum=1.0) == 1.0
-    assert _to_float(-0.5, default=0.5, minimum=0.0, maximum=1.0) == 0.0
+def test_require_int_missing():
+    """_require_int raises on missing key."""
+    import pytest
+
+    with pytest.raises(ValueError, match="missing required config key"):
+        _require_int({}, "k")
+
+
+def test_require_float_valid():
+    """_require_float parses valid values and clamps to bounds."""
+    assert _require_float({"k": 0.5}, "k", minimum=0.0, maximum=1.0) == 0.5
+    assert _require_float({"k": 2.0}, "k", minimum=0.0, maximum=1.0) == 1.0
+    assert _require_float({"k": -0.5}, "k", minimum=0.0, maximum=1.0) == 0.0
+
+
+def test_require_float_missing():
+    """_require_float raises on missing key."""
+    import pytest
+
+    with pytest.raises(ValueError, match="missing required config key"):
+        _require_float({}, "k", minimum=0.0, maximum=1.0)
 
 
 def test_type_conversion_non_empty_string():
@@ -73,31 +87,34 @@ def test_type_conversion_non_empty_string():
 
 
 def test_role_config_construction():
-    """_build_llm_role produces LLMRoleConfig with correct defaults."""
+    """_build_llm_role produces LLMRoleConfig from explicit config values."""
     role = _build_llm_role(
-        {},
+        {"timeout_seconds": 300, "max_iterations": 10},
         default_provider="openrouter",
         default_model="qwen/qwen3-coder-30b-a3b-instruct",
     )
     assert isinstance(role, LLMRoleConfig)
     assert role.provider == "openrouter"
     assert role.model == "qwen/qwen3-coder-30b-a3b-instruct"
-    assert role.timeout_seconds > 0
+    assert role.timeout_seconds == 300
 
 
 def test_dspy_role_config_construction():
-    """_build_dspy_role produces DSPyRoleConfig with correct defaults."""
+    """_build_dspy_role produces DSPyRoleConfig from explicit config values."""
     role = _build_dspy_role(
-        {},
+        {
+            "timeout_seconds": 180,
+            "max_window_tokens": 300000,
+            "window_overlap_tokens": 5000,
+        },
         default_provider="ollama",
         default_model="qwen3:8b",
     )
     assert isinstance(role, DSPyRoleConfig)
     assert role.provider == "ollama"
     assert role.model == "qwen3:8b"
-    assert role.sub_provider == "ollama"
-    assert role.sub_model == "qwen3:8b"
-    assert role.max_iterations >= 1
+    assert role.max_window_tokens == 300000
+    assert role.window_overlap_tokens == 5000
 
 
 def test_config_scaffold_creation(tmp_path, monkeypatch):

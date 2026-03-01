@@ -45,20 +45,14 @@ class LLMRoleConfig:
 
 @dataclass(frozen=True)
 class DSPyRoleConfig:
-    """Role config for DSPy extraction and summarization pipelines.
-
-    sub_provider/sub_model configure the cheaper LM used for RLM sub-LLM calls
-    (llm_query / llm_query_batched).  When empty they fall back to provider/model.
-    """
+    """Role config for DSPy extraction and summarization pipelines."""
 
     provider: str
     model: str
     api_base: str
     timeout_seconds: int
-    max_iterations: int
-    max_llm_calls: int
-    sub_provider: str
-    sub_model: str
+    max_window_tokens: int
+    window_overlap_tokens: int
     openrouter_provider_order: tuple[str, ...]
 
 
@@ -103,22 +97,34 @@ def _to_non_empty_string(value: Any) -> str:
     return str(value).strip()
 
 
-def _to_int(value: Any, default: int, minimum: int = 1) -> int:
-    """Convert value to bounded integer with fallback default."""
+def _require_int(raw: dict[str, Any], key: str, minimum: int = 0) -> int:
+    """Read a required integer from config dict. Raises if missing from config."""
+    value = raw.get(key)
+    if value is None:
+        raise ValueError(
+            f"missing required config key: {key} (set it in default.toml or user config)"
+        )
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        parsed = default
+        raise ValueError(f"config key {key} must be an integer, got: {value!r}")
     return max(minimum, parsed)
 
 
-def _to_float(value: Any, default: float, minimum: float, maximum: float) -> float:
-    """Convert value to bounded float with fallback default."""
+def _require_float(
+    raw: dict[str, Any], key: str, minimum: float = 0.0, maximum: float = 1.0
+) -> float:
+    """Read a required float from config dict. Raises if missing from config."""
+    value = raw.get(key)
+    if value is None:
+        raise ValueError(
+            f"missing required config key: {key} (set it in default.toml or user config)"
+        )
     try:
         parsed = float(value)
     except (TypeError, ValueError):
-        parsed = default
-    return max(minimum, min(maximum, parsed))
+        raise ValueError(f"config key {key} must be a number, got: {value!r}")
+    return min(maximum, max(minimum, parsed))
 
 
 def _to_fallback_models(value: Any) -> tuple[str, ...]:
@@ -154,7 +160,6 @@ def ensure_user_config_exists() -> Path:
 # [roles.extract]
 # provider = "ollama"
 # model = "qwen3:8b"
-# sub_model = "qwen3:4b"
 """,
         encoding="utf-8",
     )
@@ -252,7 +257,6 @@ class Config:
 
     server_host: str
     server_port: int
-    poll_interval_minutes: int
     sync_interval_minutes: int
     maintain_interval_minutes: int
     sync_window_days: int
@@ -308,16 +312,6 @@ class Config:
         """Backward-compatible shortcut to extract role API base."""
         return self.extract_role.api_base
 
-    @property
-    def dspy_rlm_max_iterations(self) -> int:
-        """Backward-compatible shortcut to extract role max iterations."""
-        return self.extract_role.max_iterations
-
-    @property
-    def dspy_rlm_max_llm_calls(self) -> int:
-        """Backward-compatible shortcut to extract role max call budget."""
-        return self.extract_role.max_llm_calls
-
     def public_dict(self) -> dict[str, Any]:
         """Return safe serialized config for CLI/dashboard visibility."""
         return {
@@ -333,7 +327,6 @@ class Config:
             "memory_project_dir_name": self.memory_project_dir_name,
             "server_host": self.server_host,
             "server_port": self.server_port,
-            "poll_interval_minutes": self.poll_interval_minutes,
             "sync_interval_minutes": self.sync_interval_minutes,
             "maintain_interval_minutes": self.maintain_interval_minutes,
             "lead_role": {
@@ -363,10 +356,8 @@ class Config:
                 "model": self.extract_role.model,
                 "api_base": self.extract_role.api_base,
                 "timeout_seconds": self.extract_role.timeout_seconds,
-                "max_iterations": self.extract_role.max_iterations,
-                "max_llm_calls": self.extract_role.max_llm_calls,
-                "sub_provider": self.extract_role.sub_provider,
-                "sub_model": self.extract_role.sub_model,
+                "max_window_tokens": self.extract_role.max_window_tokens,
+                "window_overlap_tokens": self.extract_role.window_overlap_tokens,
                 "openrouter_provider_order": list(
                     self.extract_role.openrouter_provider_order
                 ),
@@ -376,10 +367,8 @@ class Config:
                 "model": self.summarize_role.model,
                 "api_base": self.summarize_role.api_base,
                 "timeout_seconds": self.summarize_role.timeout_seconds,
-                "max_iterations": self.summarize_role.max_iterations,
-                "max_llm_calls": self.summarize_role.max_llm_calls,
-                "sub_provider": self.summarize_role.sub_provider,
-                "sub_model": self.summarize_role.sub_model,
+                "max_window_tokens": self.summarize_role.max_window_tokens,
+                "window_overlap_tokens": self.summarize_role.window_overlap_tokens,
                 "openrouter_provider_order": list(
                     self.summarize_role.openrouter_provider_order
                 ),
@@ -419,8 +408,8 @@ def _build_llm_role(
         model=model,
         api_base=_to_non_empty_string(raw.get("api_base")),
         fallback_models=_to_fallback_models(raw.get("fallback_models")),
-        timeout_seconds=_to_int(raw.get("timeout_seconds"), 300, minimum=30),
-        max_iterations=_to_int(raw.get("max_iterations"), 24, minimum=1),
+        timeout_seconds=_require_int(raw, "timeout_seconds", minimum=10),
+        max_iterations=_require_int(raw, "max_iterations", minimum=1),
         openrouter_provider_order=_to_string_tuple(
             raw.get("openrouter_provider_order")
         ),
@@ -433,17 +422,13 @@ def _build_dspy_role(
     """Build one DSPy role config from TOML payload."""
     provider = _to_non_empty_string(raw.get("provider")) or default_provider
     model = _to_non_empty_string(raw.get("model")) or default_model
-    sub_provider = _to_non_empty_string(raw.get("sub_provider")) or provider
-    sub_model = _to_non_empty_string(raw.get("sub_model")) or model
     return DSPyRoleConfig(
         provider=provider,
         model=model,
         api_base=_to_non_empty_string(raw.get("api_base")),
-        timeout_seconds=_to_int(raw.get("timeout_seconds"), 120, minimum=10),
-        max_iterations=_to_int(raw.get("max_iterations"), 24, minimum=1),
-        max_llm_calls=_to_int(raw.get("max_llm_calls"), 24, minimum=1),
-        sub_provider=sub_provider,
-        sub_model=sub_model,
+        timeout_seconds=_require_int(raw, "timeout_seconds", minimum=10),
+        max_window_tokens=_require_int(raw, "max_window_tokens", minimum=1000),
+        window_overlap_tokens=_require_int(raw, "window_overlap_tokens", minimum=0),
         openrouter_provider_order=_to_string_tuple(
             raw.get("openrouter_provider_order")
         ),
@@ -564,7 +549,7 @@ def load_config() -> Config:
         default_model=extract_role.model,
     )
 
-    port = _to_int(server.get("port"), 8765, minimum=1)
+    port = _require_int(server, "port", minimum=1)
     if port > 65535:
         port = 8765
 
@@ -592,30 +577,25 @@ def load_config() -> Config:
         memory_scope=memory_scope,
         memory_project_dir_name=memory_project_dir_name,
         decay_enabled=bool(decay.get("enabled", True)),
-        decay_days=_to_int(decay.get("decay_days"), 180, minimum=30),
-        decay_min_confidence_floor=_to_float(
-            decay.get("min_confidence_floor"), 0.1, minimum=0.0, maximum=1.0
+        decay_days=_require_int(decay, "decay_days", minimum=30),
+        decay_min_confidence_floor=_require_float(
+            decay, "min_confidence_floor", minimum=0.0, maximum=1.0
         ),
-        decay_archive_threshold=_to_float(
-            decay.get("archive_threshold"), 0.2, minimum=0.0, maximum=1.0
+        decay_archive_threshold=_require_float(
+            decay, "archive_threshold", minimum=0.0, maximum=1.0
         ),
-        decay_recent_access_grace_days=_to_int(
-            decay.get("recent_access_grace_days"), 30, minimum=0
+        decay_recent_access_grace_days=_require_int(
+            decay, "recent_access_grace_days", minimum=0
         ),
         server_host=_to_non_empty_string(server.get("host")) or "127.0.0.1",
         server_port=port,
-        poll_interval_minutes=_to_int(
-            server.get("poll_interval_minutes"), 30, minimum=1
+        sync_interval_minutes=_require_int(server, "sync_interval_minutes", minimum=1),
+        maintain_interval_minutes=_require_int(
+            server, "maintain_interval_minutes", minimum=1
         ),
-        sync_interval_minutes=_to_int(
-            server.get("sync_interval_minutes"), 10, minimum=1
-        ),
-        maintain_interval_minutes=_to_int(
-            server.get("maintain_interval_minutes"), 60, minimum=1
-        ),
-        sync_window_days=_to_int(server.get("sync_window_days"), 7, minimum=1),
-        sync_max_sessions=_to_int(server.get("sync_max_sessions"), 50, minimum=1),
-        sync_max_workers=_to_int(server.get("sync_max_workers"), 4, minimum=1),
+        sync_window_days=_require_int(server, "sync_window_days", minimum=1),
+        sync_max_sessions=_require_int(server, "sync_max_sessions", minimum=1),
+        sync_max_workers=_require_int(server, "sync_max_workers", minimum=1),
         lead_role=lead_role,
         explorer_role=explorer_role,
         extract_role=extract_role,
@@ -724,11 +704,11 @@ if __name__ == "__main__":
     assert isinstance(cfg.lead_role.fallback_models, tuple)
     assert cfg.explorer_role.provider
     assert cfg.extract_role.provider
-    assert cfg.extract_role.max_iterations >= 1
-    assert cfg.extract_role.max_llm_calls >= 1
+    assert cfg.extract_role.max_window_tokens >= 1000
+    assert cfg.extract_role.window_overlap_tokens >= 0
     assert cfg.summarize_role.provider
-    assert cfg.summarize_role.max_iterations >= 1
-    assert cfg.summarize_role.max_llm_calls >= 1
+    assert cfg.summarize_role.max_window_tokens >= 1000
+    assert cfg.summarize_role.window_overlap_tokens >= 0
     assert isinstance(cfg.tracing_enabled, bool)
     assert isinstance(cfg.tracing_include_httpx, bool)
     assert isinstance(cfg.tracing_include_content, bool)

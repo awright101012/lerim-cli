@@ -8,7 +8,7 @@ hide:
 **Continual learning layer for coding agents**
 
 <p align="center">
-  <img src="assets/lerim.png" alt="Lerim Logo" width="160">
+  <img src="../assets/lerim.png" alt="Lerim Logo" width="160">
 </p>
 
 Lerim gives coding agents persistent memory across sessions. It watches your agent conversations (Claude Code, Codex, Cursor, OpenCode, ...), extracts decisions and learnings, and stores them as plain markdown files that both humans and agents can read.
@@ -16,7 +16,7 @@ Lerim gives coding agents persistent memory across sessions. It watches your age
 Memories are refined offline over time through merging, deduplication, archiving, and decay-based forgetting.
 
 <p align="center">
-  <img src="assets/agent-network.gif" alt="Lerim network animation" width="450">
+  <img src="../assets/agent-network.gif" alt="Lerim network animation" width="450">
 </p>
 
 ## How it works

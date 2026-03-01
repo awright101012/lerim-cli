@@ -19,7 +19,6 @@ recent_access_grace_days = 30       # recently accessed memories skip archiving
 [server]
 host = "127.0.0.1"
 port = 8765
-poll_interval_minutes = 30
 sync_interval_minutes = 10          # sync hot path interval
 maintain_interval_minutes = 60      # maintain cold path interval
 sync_window_days = 7
@@ -32,7 +31,7 @@ model = "x-ai/grok-4.1-fast"
 api_base = ""
 fallback_models = []
 timeout_seconds = 300
-max_iterations = 24
+max_iterations = 10
 openrouter_provider_order = []
 
 [roles.explorer]
@@ -41,29 +40,27 @@ model = "x-ai/grok-4.1-fast"
 api_base = ""
 fallback_models = []
 timeout_seconds = 180
-max_iterations = 16
+max_iterations = 8
 openrouter_provider_order = []
 
 [roles.extract]
 provider = "openrouter"
-model = "x-ai/grok-4.1-fast"
-sub_model = "x-ai/grok-4.1-fast"
+model = "openai/gpt-5-nano"
 api_base = ""
-fallback_models = []
+fallback_models = ["x-ai/grok-4.1-fast"]
 timeout_seconds = 180
-max_iterations = 8
-max_llm_calls = 12
+max_window_tokens = 300000
+window_overlap_tokens = 5000
 openrouter_provider_order = []
 
 [roles.summarize]
 provider = "openrouter"
-model = "x-ai/grok-4.1-fast"
-sub_model = "x-ai/grok-4.1-fast"
+model = "openai/gpt-5-nano"
 api_base = ""
-fallback_models = []
+fallback_models = ["x-ai/grok-4.1-fast"]
 timeout_seconds = 180
-max_iterations = 8
-max_llm_calls = 12
+max_window_tokens = 300000
+window_overlap_tokens = 5000
 openrouter_provider_order = []
 
 [providers]

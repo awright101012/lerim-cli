@@ -8,13 +8,13 @@ import sqlite3
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from lerim.app.activity_log import log_activity
 from lerim.app.arg_utils import parse_duration_to_seconds
 from lerim.config.project_scope import match_session_project
 from lerim.config.settings import get_config, reload_config
@@ -249,6 +249,7 @@ class SyncSummary:
     learnings_new: int
     learnings_updated: int
     run_ids: list[str]
+    cost_usd: float = 0.0
 
 
 def resolve_window_bounds(
@@ -341,34 +342,39 @@ def _process_one_job(job: dict[str, Any]) -> dict[str, Any]:
         "status": "extracted",
         "learnings_new": int(counts.get("add") or 0),
         "learnings_updated": int(counts.get("update") or 0),
+        "cost_usd": float(result.get("cost_usd") or 0),
     }
 
 
 def _process_claimed_jobs(
     claimed: list[dict[str, Any]],
-    *,
-    max_workers: int = 4,
-) -> tuple[int, int, int, int, int]:
-    """Process claimed jobs in parallel. Returns (extracted, failed, skipped, new, updated)."""
+) -> tuple[int, int, int, int, int, float]:
+    """Process claimed jobs sequentially in chronological order.
+
+    Jobs are already sorted oldest-first by ``claim_session_jobs``.
+    Sequential processing ensures that later sessions can correctly
+    update or supersede memories created by earlier ones.
+
+    Returns (extracted, failed, skipped, new, updated, cost_usd).
+    """
     extracted = 0
     failed = 0
     skipped = 0
     learnings_new = 0
     learnings_updated = 0
-    workers = min(max(max_workers, 1), len(claimed)) if claimed else 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_process_one_job, job): job for job in claimed}
-        for future in as_completed(futures):
-            result = future.result()
-            if result["status"] == "extracted":
-                extracted += 1
-                learnings_new += result.get("learnings_new", 0)
-                learnings_updated += result.get("learnings_updated", 0)
-            elif result["status"] == "failed":
-                failed += 1
-            elif result["status"] == "skipped":
-                skipped += 1
-    return extracted, failed, skipped, learnings_new, learnings_updated
+    cost_usd = 0.0
+    for job in claimed:
+        result = _process_one_job(job)
+        if result["status"] == "extracted":
+            extracted += 1
+            learnings_new += result.get("learnings_new", 0)
+            learnings_updated += result.get("learnings_updated", 0)
+            cost_usd += result.get("cost_usd", 0.0)
+        elif result["status"] == "failed":
+            failed += 1
+        elif result["status"] == "skipped":
+            skipped += 1
+    return extracted, failed, skipped, learnings_new, learnings_updated, cost_usd
 
 
 def run_sync_once(
@@ -385,6 +391,7 @@ def run_sync_once(
     window_end: datetime | None = None,
 ) -> tuple[int, SyncSummary]:
     """Run one sync cycle: index sessions, enqueue jobs, process extraction."""
+    t0 = time.monotonic()
     reload_config()
 
     started = _now_iso()
@@ -446,9 +453,7 @@ def run_sync_once(
                 )
                 indexed_sessions = len(details)
                 for item in details:
-                    match = match_session_project(
-                        item.repo_path, config.projects
-                    )
+                    match = match_session_project(item.repo_path, config.projects)
                     if match is None:
                         continue
                     _project_name, project_path = match
@@ -470,6 +475,8 @@ def run_sync_once(
         failed = 0
         learnings_new = 0
         learnings_updated = 0
+        cost_usd = 0.0
+        projects: set[str] = set()
         claim_limit = max(max_sessions, 1)
 
         if no_extract:
@@ -479,14 +486,21 @@ def run_sync_once(
                 limit=claim_limit,
                 run_ids=[run_id] if run_id else None,
             )
+            for job in claimed:
+                rp = str(job.get("repo_path") or "").strip()
+                if rp:
+                    projects.add(Path(rp).name)
             target_run_ids = [
                 str(item.get("run_id") or "") for item in claimed if item.get("run_id")
             ]
-            max_workers = get_config().sync_max_workers
-            extracted, failed, routing_skipped, learnings_new, learnings_updated = _process_claimed_jobs(
-                claimed,
-                max_workers=max_workers,
-            )
+            (
+                extracted,
+                failed,
+                routing_skipped,
+                learnings_new,
+                learnings_updated,
+                cost_usd,
+            ) = _process_claimed_jobs(claimed)
             skipped += routing_skipped
 
         summary = SyncSummary(
@@ -497,6 +511,7 @@ def run_sync_once(
             learnings_new=learnings_new,
             learnings_updated=learnings_updated,
             run_ids=target_run_ids,
+            cost_usd=cost_usd,
         )
 
         code = EXIT_OK
@@ -529,6 +544,20 @@ def run_sync_once(
                 "dry_run": dry_run,
             },
         )
+        if not dry_run and (extracted or learnings_new or learnings_updated):
+            parts = []
+            if learnings_new:
+                parts.append(f"{learnings_new} new")
+            if learnings_updated:
+                parts.append(f"{learnings_updated} updated")
+            parts.append(f"{extracted} sessions")
+            log_activity(
+                "sync",
+                ", ".join(sorted(projects)) or "global",
+                ", ".join(parts),
+                time.monotonic() - t0,
+                cost_usd=cost_usd,
+            )
         return code, summary
     finally:
         if lock:
@@ -541,6 +570,7 @@ def run_maintain_once(
     dry_run: bool,
 ) -> tuple[int, dict]:
     """Run one maintain cycle with lock handling and service run record."""
+    t0 = time.monotonic()
     reload_config()
 
     started = _now_iso()
@@ -571,17 +601,65 @@ def run_maintain_once(
         return EXIT_LOCK_BUSY, {"error": str(exc)}
 
     try:
-        agent = LerimAgent(default_cwd=str(Path.cwd()))
-        result = agent.maintain()
+        config = get_config()
+        projects = config.projects or {}
+        if not projects:
+            # No registered projects — maintain CWD-based fallback.
+            projects = {"global": str(Path.cwd())}
+
+        results: dict[str, dict] = {}
+        failed_projects: list[str] = []
+        for project_name, project_path_str in projects.items():
+            project_path = Path(project_path_str).expanduser().resolve()
+            if not project_path.is_dir():
+                continue
+            project_memory = str(project_path / ".lerim" / "memory")
+            try:
+                agent = LerimAgent(default_cwd=str(project_path))
+                result = agent.maintain(memory_root=project_memory)
+                results[project_name] = result
+                # Activity log per project.
+                counts = (
+                    (result.get("counts") or {}) if isinstance(result, dict) else {}
+                )
+                parts = []
+                for key in ("merged", "archived", "consolidated", "decayed"):
+                    val = counts.get(key, 0)
+                    if val:
+                        parts.append(f"{val} {key}")
+                if parts:
+                    maintain_cost = float(result.get("cost_usd") or 0)
+                    log_activity(
+                        "maintain",
+                        project_name,
+                        ", ".join(parts),
+                        time.monotonic() - t0,
+                        cost_usd=maintain_cost,
+                    )
+            except Exception as exc:
+                failed_projects.append(project_name)
+                results[project_name] = {"error": str(exc)}
+
+        status = (
+            "failed"
+            if failed_projects and not (set(projects) - set(failed_projects))
+            else ("partial" if failed_projects else "completed")
+        )
+        details = {"projects": results}
         _record_service_event(
             record_service_run,
             job_type="maintain",
-            status="completed",
+            status=status,
             started_at=started,
             trigger="manual",
-            details=result,
+            details=details,
         )
-        return EXIT_OK, result
+        code = (
+            EXIT_FATAL
+            if status == "failed"
+            else (EXIT_PARTIAL if status == "partial" else EXIT_OK)
+        )
+        return code, details
     except Exception as exc:
         _record_service_event(
             record_service_run,

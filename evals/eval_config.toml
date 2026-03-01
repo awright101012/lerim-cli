@@ -7,11 +7,7 @@ agent = "claude"  # "claude" | "codex" | "opencode"
 [extraction]
 provider = "openrouter"
 model = "qwen/qwen3-coder-30b-a3b-instruct"
-sub_provider = "openrouter"
-sub_model = "qwen/qwen3-coder-30b-a3b-instruct"
 
 [summarization]
 provider = "openrouter"
 model = "qwen/qwen3-coder-30b-a3b-instruct"
-sub_provider = "openrouter"
-sub_model = "qwen/qwen3-coder-30b-a3b-instruct"

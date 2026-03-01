@@ -40,10 +40,8 @@ def test_build_dspy_lm_ollama(tmp_path):
         model="qwen3:4b",
         api_base="",
         timeout_seconds=120,
-        max_iterations=24,
-        max_llm_calls=24,
-        sub_provider="ollama",
-        sub_model="qwen3:4b",
+        max_window_tokens=300000,
+        window_overlap_tokens=5000,
         openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=ollama_role)
@@ -64,10 +62,8 @@ def test_build_dspy_lm_openrouter(tmp_path):
         model="test/model",
         api_base="",
         timeout_seconds=120,
-        max_iterations=24,
-        max_llm_calls=24,
-        sub_provider="openrouter",
-        sub_model="test/model",
+        max_window_tokens=300000,
+        window_overlap_tokens=5000,
         openrouter_provider_order=("nebius",),
     )
     cfg = replace(cfg, extract_role=or_role)
@@ -87,10 +83,8 @@ def test_build_dspy_lm_zai(tmp_path):
         model="glm-4.5-air",
         api_base="",
         timeout_seconds=120,
-        max_iterations=24,
-        max_llm_calls=24,
-        sub_provider="zai",
-        sub_model="glm-4.5-air",
+        max_window_tokens=300000,
+        window_overlap_tokens=5000,
         openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=zai_role, zai_api_key="test-key")
@@ -143,10 +137,8 @@ def test_missing_api_key_raises(tmp_path):
         model="test/model",
         api_base="",
         timeout_seconds=120,
-        max_iterations=24,
-        max_llm_calls=24,
-        sub_provider="openrouter",
-        sub_model="test/model",
+        max_window_tokens=300000,
+        window_overlap_tokens=5000,
         openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=or_role)

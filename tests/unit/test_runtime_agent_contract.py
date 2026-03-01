@@ -26,9 +26,9 @@ def test_default_read_only_tools_exist() -> None:
     assert "explore" in agent.single_tools
 
 
-def test_chat_mode_honors_single_tools_allowlist() -> None:
+def test_ask_mode_honors_single_tools_allowlist() -> None:
     agent = LerimAgent(single_tools=["read", "glob"])
-    built = agent._build_lead_agent("chat")
+    built = agent._build_lead_agent("ask")
     tool_names = set(built._function_toolset.tools.keys())
     assert tool_names == {"read", "glob"}
 
@@ -38,6 +38,7 @@ def test_sync_mode_uses_memory_write_toolset() -> None:
     built = agent._build_lead_agent("sync")
     tool_names = set(built._function_toolset.tools.keys())
     assert "write" in tool_names
+    assert "write_memory" in tool_names
     assert "extract_pipeline" in tool_names
     assert "summarize_pipeline" in tool_names
 
@@ -121,7 +122,7 @@ def _fake_run_agent_once(
         json.dumps(report, ensure_ascii=True, indent=2) + "\n",
         encoding="utf-8",
     )
-    return "ok", "session-1"
+    return "ok", "session-1", 0.0
 
 
 def test_sync_contract_creates_workspace_folder(tmp_path: Path) -> None:
@@ -174,11 +175,6 @@ def test_sync_prompt_uses_trace_path_not_trace_content(tmp_path: Path) -> None:
 
     assert str(trace_path.resolve()) in prompt
     assert "NEVER_INLINE_THIS_TRACE_CONTENT" not in prompt
-    assert (
-        "extract_pipeline(trace_path, output_path, metadata, metrics, guidance)"
-        in prompt
-    )
-    assert (
-        "summarize_pipeline(trace_path, output_path, metadata, metrics, guidance)"
-        in prompt
-    )
+    assert "extract_pipeline" in prompt
+    assert "summarize_pipeline" in prompt
+    assert "write_memory" in prompt

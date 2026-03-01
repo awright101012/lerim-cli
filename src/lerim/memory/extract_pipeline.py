@@ -1,7 +1,6 @@
-"""Minimal extraction pipeline for session transcripts.
+"""Extraction pipeline for session transcripts using ChainOfThought + windowing.
 
-The extraction path is intentionally simple:
-session file (.jsonl/.json) -> read text -> dspy.RLM -> memory candidates.
+session file (.jsonl/.json) -> read text -> window -> dspy.ChainOfThought -> merge -> memory candidates.
 """
 
 from __future__ import annotations
@@ -19,31 +18,17 @@ import dspy
 
 from lerim.config.settings import get_config
 from lerim.memory.schemas import MemoryCandidate
-from lerim.memory.utils import configure_dspy_lm, configure_dspy_sub_lm
+from lerim.memory.utils import configure_dspy_lm, window_transcript
+from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
 
 
 class MemoryExtractSignature(dspy.Signature):
-    """Extract reusable memory candidates from a raw coding-agent session transcript.
+    """Extract reusable memory candidates from this transcript segment.
 
-    IMPORTANT -- Extraction strategy (you are running inside an RLM REPL):
-    1) Do NOT normalize or pre-parse the transcript schema. Treat it as raw text.
-       Different agents (Claude Code, Codex, Cursor, Windsurf) use different JSON shapes.
-    2) First EXPLORE: sample a few spans from beginning, middle, and end to understand
-       the structure and length. Print samples, check types. Do not try to solve in one step.
-    3) Build overlapping windows of ~20,000 characters with ~2,000 overlap.
-    4) For each window, use llm_query() to extract only durable, high-value items:
-       - decision: explicit stable choice / configuration / policy.
-         Trigger words: "decision", "we will", "use X not Y", "always do", "never do", "set X to Y".
-       - learning: reusable lesson / fix / pitfall / friction signal / user preference / habit.
-         Trigger words: "lesson", "fix", "found that", "struggled with", "wasted time on",
-         "I prefer", "I like", "I want", "I always", "my style", "don't like", "hate when",
-         "keep it", "make sure", "never use", "always use", "I usually", "my convention".
-       - When in doubt, prefer learning.
-    5) For every extracted item, keep one short verbatim evidence quote (<=200 chars).
-    6) After processing all windows, MERGE near-duplicates across windows.
-    7) Prefer precision over recall. If evidence is weak, drop it.
-    8) SUBMIT only the final deduplicated primitives list.
+    Focus on decisions (explicit choices/policies) and learnings
+    (lessons/fixes/pitfalls/preferences). Keep one short evidence quote
+    per item (<=200 chars). Prefer precision over recall.
 
     Kind (for learnings only):
     - insight: a reusable observation or pattern.
@@ -51,17 +36,8 @@ class MemoryExtractSignature(dspy.Signature):
     - friction: a blocker, struggle, or time-waster.
     - pitfall: a mistake to avoid.
     - preference: a user preference, habit, convention, or style choice.
-      Examples: coding style, tool choices, naming conventions, communication preferences,
-      workflow habits, formatting rules, library preferences.
 
-    Tags: assign descriptive group/cluster labels for categorization. No limit on count.
-    Examples: queue, heartbeat, docker, ci-cd, patching, error-handling, coding-style, naming.
-
-    Focus on high-value items:
-    - repeated struggles and blockers
-    - lessons and fixes that worked
-    - decisions to reuse later
-    - user preferences, habits, and conventions (what the user likes/dislikes, how they work)
+    Tags: assign descriptive group/cluster labels for categorization.
     """
 
     transcript: str = dspy.InputField(
@@ -77,55 +53,79 @@ class MemoryExtractSignature(dspy.Signature):
     )
 
 
-def _extract_candidates_with_rlm(
+class MemoryMergeSignature(dspy.Signature):
+    """Merge and deduplicate memory candidates extracted from multiple transcript windows.
+
+    Remove near-duplicates (keep highest-confidence version).
+    Drop weak or redundant items. Return the final clean list.
+    """
+
+    candidates: list[dict] = dspy.InputField(
+        desc="All per-window candidates as list of dicts"
+    )
+    metadata: dict = dspy.InputField(desc="Session metadata")
+    primitives: list[MemoryCandidate] = dspy.OutputField(desc="Deduplicated final list")
+
+
+def _extract_candidates(
     transcript: str,
     *,
     metadata: dict[str, Any] | None = None,
     metrics: dict[str, Any] | None = None,
     guidance: str = "",
 ) -> list[dict[str, Any]]:
-    """Run DSPy RLM on transcript text and return normalized candidates."""
+    """Run ChainOfThought extraction with windowing and return normalized candidates."""
     if not transcript.strip():
         return []
     config = get_config()
-    max_iterations = config.dspy_rlm_max_iterations
-    max_llm_calls = config.dspy_rlm_max_llm_calls
+    max_tokens = config.extract_role.max_window_tokens
+    overlap_tokens = config.extract_role.window_overlap_tokens
+    windows = window_transcript(transcript, max_tokens, overlap_tokens)
     lm = configure_dspy_lm("extract")
-    sub_lm = configure_dspy_sub_lm("extract")
-    rlm = dspy.RLM(
-        MemoryExtractSignature,
-        max_iterations=max_iterations,
-        max_llm_calls=max_llm_calls,
-        sub_lm=sub_lm,
-        verbose=False,
-    )
+    meta = metadata or {}
+    met = metrics or {}
+    guid = guidance.strip()
+
+    all_candidates: list[dict[str, Any]] = []
+    extractor = dspy.ChainOfThought(MemoryExtractSignature)
+    history_start = len(lm.history)
     with dspy.context(lm=lm):
-        try:
-            result = rlm(
-                transcript=transcript,
-                metadata=metadata or {},
-                metrics=metrics or {},
-                guidance=guidance.strip(),
+        for window in windows:
+            result = extractor(
+                transcript=window, metadata=meta, metrics=met, guidance=guid
             )
-        except Exception:
-            result = None
-        # Fallback to Predict if RLM failed or returned empty candidates
-        if result is None or not getattr(result, "primitives", None):
-            predictor = dspy.Predict(MemoryExtractSignature)
-            result = predictor(
-                transcript=transcript,
-                metadata=metadata or {},
-                metrics=metrics or {},
-                guidance=guidance.strip(),
-            )
-    primitives = getattr(result, "primitives", [])
-    if not isinstance(primitives, list):
+            primitives = getattr(result, "primitives", [])
+            if isinstance(primitives, list):
+                for item in primitives:
+                    if isinstance(item, MemoryCandidate):
+                        all_candidates.append(
+                            item.model_dump(mode="json", exclude_none=True)
+                        )
+                    elif isinstance(item, dict):
+                        all_candidates.append(item)
+
+    if not all_candidates:
+        capture_dspy_cost(lm, history_start)
         return []
+
+    # Single window: no merge needed
+    if len(windows) == 1:
+        capture_dspy_cost(lm, history_start)
+        return all_candidates
+
+    # Multiple windows: merge and deduplicate
+    merger = dspy.ChainOfThought(MemoryMergeSignature)
+    with dspy.context(lm=lm):
+        merge_result = merger(candidates=all_candidates, metadata=meta)
+    capture_dspy_cost(lm, history_start)
+    merged = getattr(merge_result, "primitives", [])
+    if not isinstance(merged, list):
+        return all_candidates
     return [
         item.model_dump(mode="json", exclude_none=True)
         if isinstance(item, MemoryCandidate)
         else item
-        for item in primitives
+        for item in merged
         if isinstance(item, (MemoryCandidate, dict))
     ]
 
@@ -141,7 +141,7 @@ def extract_memories_from_session_file(
     if not session_file_path.exists() or not session_file_path.is_file():
         raise FileNotFoundError(f"session_file_missing:{session_file_path}")
     transcript = session_file_path.read_text(encoding="utf-8")
-    return _extract_candidates_with_rlm(
+    return _extract_candidates(
         transcript,
         metadata=metadata,
         metrics=metrics,

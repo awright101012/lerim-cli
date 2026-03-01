@@ -103,34 +103,34 @@ Lerim uses four model roles, each independently configurable:
 | `extract` | DSPy extraction pipeline |
 | `summarize` | DSPy summarization pipeline |
 
-Default model config (all roles use OpenRouter with Grok):
+Default model config (lead/explorer use Grok, extract/summarize use GPT-5 Nano):
 
 ```toml
 [roles.lead]
 provider = "openrouter"               # zai | openrouter | openai
 model = "x-ai/grok-4.1-fast"
 timeout_seconds = 300
-max_iterations = 24
+max_iterations = 10
 
 [roles.explorer]
 provider = "openrouter"
 model = "x-ai/grok-4.1-fast"
 timeout_seconds = 180
-max_iterations = 16
+max_iterations = 8
 
 [roles.extract]
 provider = "openrouter"
-model = "x-ai/grok-4.1-fast"
-sub_model = "x-ai/grok-4.1-fast"
+model = "openai/gpt-5-nano"
 timeout_seconds = 180
-max_llm_calls = 12
+max_window_tokens = 300000
+window_overlap_tokens = 5000
 
 [roles.summarize]
 provider = "openrouter"
-model = "x-ai/grok-4.1-fast"
-sub_model = "x-ai/grok-4.1-fast"
+model = "openai/gpt-5-nano"
 timeout_seconds = 180
-max_llm_calls = 12
+max_window_tokens = 300000
+window_overlap_tokens = 5000
 ```
 
 ### Switching providers
@@ -146,7 +146,6 @@ model = "gpt-4o"
 [roles.extract]
 provider = "openai"
 model = "gpt-4o"
-sub_model = "gpt-4o-mini"
 ```
 
 ### Using local models via Ollama
@@ -165,13 +164,13 @@ Each role supports:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `provider` | `openrouter` | Provider name: `openrouter`, `openai`, `zai` |
-| `model` | `x-ai/grok-4.1-fast` | Model identifier |
-| `sub_model` | same as `model` | Secondary model for DSPy roles |
+| `model` | varies by role | Model identifier (lead/explorer: `x-ai/grok-4.1-fast`, extract/summarize: `openai/gpt-5-nano`) |
 | `api_base` | — | Custom API base URL |
 | `fallback_models` | `[]` | Fallback model list |
 | `timeout_seconds` | varies | Request timeout |
-| `max_iterations` | varies | Max agent iterations |
-| `max_llm_calls` | varies | Max LLM calls (DSPy roles) |
+| `max_iterations` | varies | Max agent iterations (orchestration roles only) |
+| `max_window_tokens` | `300000` | Max tokens per transcript window (DSPy roles only). Increase for large-context models. |
+| `window_overlap_tokens` | `5000` | Token overlap between windows (DSPy roles only) |
 | `openrouter_provider_order` | `[]` | OpenRouter provider routing preference |
 
 ## Memory scope

@@ -99,7 +99,6 @@ lerim project remove my-app # unregister a project
 If you prefer not to use Docker, run `lerim serve` directly:
 
 ```bash
-brew install deno            # Deno is required for extraction
 lerim connect auto           # detect agent platforms
 lerim serve                  # start API server + dashboard + daemon loop
 ```

@@ -14,12 +14,12 @@ from lerim.memory.access_tracker import (
     record_access,
 )
 from lerim.memory.memory_repo import build_memory_paths
-from lerim.runtime.prompts.chat import build_chat_prompt
+from lerim.runtime.prompts.ask import build_ask_prompt
 from lerim.runtime.prompts.maintain import (
     build_maintain_artifact_paths,
     build_maintain_prompt,
 )
-from lerim.runtime.tools import build_tool_context, read_file_tool, write_file_tool
+from lerim.runtime.tools import build_tool_context, read_file_tool, write_memory_tool
 from tests.helpers import make_config
 
 
@@ -154,17 +154,14 @@ class TestRuntimeToolAccessTracking:
     def test_write_tool_tracks_memory_write(self, tmp_path: Path) -> None:
         context = self._context(tmp_path)
         assert context.memory_root is not None
-        write_file_tool(
+        write_memory_tool(
             context=context,
-            file_path=str(context.memory_root / "learnings" / "draft.md"),
-            content=(
-                "---\n"
-                "title: Queue pattern\n"
-                "confidence: 0.8\n"
-                "tags: [queue]\n"
-                "---\n"
-                "Keep claim and heartbeat flow deterministic.\n"
-            ),
+            primitive="learning",
+            title="Queue pattern",
+            body="Keep claim and heartbeat flow deterministic.",
+            confidence=0.8,
+            tags=["queue"],
+            kind="insight",
         )
         stats = get_access_stats(
             context.config.memories_db_path, str(context.memory_root)
@@ -173,17 +170,17 @@ class TestRuntimeToolAccessTracking:
         assert stats[0]["memory_id"].endswith("-queue-pattern")
 
 
-class TestChatPromptMemoryRoot:
-    """Chat prompt includes memory guidance when memory_root is provided."""
+class TestAskPromptMemoryRoot:
+    """Ask prompt includes memory guidance when memory_root is provided."""
 
     def test_guidance_with_memory_root(self) -> None:
-        prompt = build_chat_prompt("test", [], [], memory_root="/data/memory")
+        prompt = build_ask_prompt("test", [], [], memory_root="/data/memory")
         assert "Memory root: /data/memory" in prompt
         assert "grep" in prompt
         assert "decisions/*.md" in prompt
 
     def test_no_guidance_without_memory_root(self) -> None:
-        prompt = build_chat_prompt("test", [], [])
+        prompt = build_ask_prompt("test", [], [])
         assert "Memory root" not in prompt
 
 

@@ -1,6 +1,7 @@
-"""Trace summarization pipeline that outputs markdown-frontmatter-ready metadata + summary.
+"""Trace summarization pipeline using ChainOfThought + windowing.
 
-When --memory-root is provided, the pipeline writes the summary markdown file
+Outputs markdown-frontmatter-ready metadata + summary.
+When --memory-root is provided, writes the summary markdown file
 directly to memory_root/summaries/YYYYMMDD/HHMMSS/{slug}.md using python-frontmatter.
 """
 
@@ -22,7 +23,8 @@ from pydantic import BaseModel, Field
 
 from lerim.memory.memory_record import slugify
 from lerim.config.settings import get_config, reload_config
-from lerim.memory.utils import configure_dspy_lm, configure_dspy_sub_lm
+from lerim.memory.utils import configure_dspy_lm, window_transcript
+from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
 
 
@@ -65,30 +67,28 @@ At most 200 words.""",
     )
 
 
+class PartialSummary(BaseModel):
+    """Lightweight model for per-window partial summaries."""
+
+    user_goals: str = Field(description="User goals and intentions from this window.")
+    key_actions: str = Field(description="Key actions taken in this window.")
+    failures_and_frictions: str = Field(
+        description="Failures, frictions, and blockers encountered."
+    )
+    fixes_and_outcomes: str = Field(description="Fixes applied and outcomes achieved.")
+
+
 class TraceSummarySignature(dspy.Signature):
     """Summarize a raw coding-agent session trace into structured metadata plus a two-part summary.
 
-    IMPORTANT -- Summarization strategy (you are running inside an RLM REPL):
-    1) Do NOT normalize or pre-parse the transcript schema. Treat it as raw text.
-       Different agents (Claude Code, Codex, Cursor, Windsurf) use different JSON shapes.
-    2) First EXPLORE: sample spans from beginning, middle, and end to understand
-       the structure, length, and agent format. Print samples, check types.
-    3) Read the transcript in overlapping windows (~25,000 chars, ~2,000 overlap).
-    4) For each window, use llm_query() to extract a running buffer of:
-       - user goals and intentions
-       - key actions taken
-       - key failures, frictions, and blockers
-       - fixes applied and outcomes achieved
-    5) After all windows, MERGE the per-window buffers into a coherent narrative.
-    6) Produce the final summary:
-       - user_intent: the user's overall goal across the whole chat (at most 150 words).
-         Not the literal first query, but the broader purpose.
-       - session_narrative: what actually happened chronologically -- actions taken,
-         problems hit, solutions applied, and final outcome (at most 200 words).
-    7) Ground all claims in transcript evidence. Avoid invented details.
-    8) Keep title and description concise and specific.
-    9) Assign descriptive tags (group/cluster labels) for categorization. No limit on tag count.
-    10) Extract date, time, coding_agent from transcript or metadata when available.
+    Produce a concise summary with:
+    - user_intent: the user's overall goal (at most 150 words)
+    - session_narrative: what happened chronologically (at most 200 words)
+    - title and description: concise and specific
+    - tags: descriptive group/cluster labels
+    - date, time, coding_agent from transcript or metadata
+
+    Ground all claims in transcript evidence. Avoid invented details.
     """
 
     transcript: str = dspy.InputField(
@@ -104,44 +104,86 @@ class TraceSummarySignature(dspy.Signature):
     )
 
 
-def _summarize_trace_with_rlm(
+class WindowSummarySignature(dspy.Signature):
+    """Summarize this transcript segment.
+
+    Extract user goals, key actions taken, failures/frictions encountered,
+    and fixes/outcomes achieved.
+    """
+
+    transcript: str = dspy.InputField(desc="One transcript window segment")
+    metadata: dict = dspy.InputField(desc="Session metadata")
+    window_index: int = dspy.InputField(desc="Zero-based window index")
+    total_windows: int = dspy.InputField(desc="Total number of windows")
+    partial: PartialSummary = dspy.OutputField(desc="Partial summary for this window")
+
+
+class TraceSummaryMergeSignature(dspy.Signature):
+    """Merge partial summaries from multiple transcript windows into one coherent trace summary.
+
+    Produce a unified user_intent (<=150 words) and session_narrative (<=200 words).
+    Ground all claims in the partial evidence.
+    """
+
+    partial_summaries: list[dict] = dspy.InputField(desc="List of PartialSummary dicts")
+    metadata: dict = dspy.InputField(desc="Session metadata")
+    metrics: dict = dspy.InputField(desc="Deterministic metrics")
+    guidance: str = dspy.InputField(desc="Optional guidance")
+    summary_payload: TraceSummaryCandidate = dspy.OutputField(
+        desc="Final merged summary"
+    )
+
+
+def _summarize_trace(
     transcript: str,
     *,
     metadata: dict[str, Any] | None = None,
     metrics: dict[str, Any] | None = None,
     guidance: str = "",
 ) -> dict[str, Any]:
-    """Run DSPy RLM summarization and return schema-validated summary metadata payload."""
+    """Run ChainOfThought summarization with windowing and return validated summary."""
     if not transcript.strip():
         raise RuntimeError("session_trace_empty")
     config = get_config()
-    max_iterations = config.summarize_role.max_iterations
-    max_llm_calls = config.summarize_role.max_llm_calls
+    max_tokens = config.summarize_role.max_window_tokens
+    overlap_tokens = config.summarize_role.window_overlap_tokens
+    windows = window_transcript(transcript, max_tokens, overlap_tokens)
     lm = configure_dspy_lm("summarize")
-    sub_lm = configure_dspy_sub_lm("summarize")
-    rlm = dspy.RLM(
-        TraceSummarySignature,
-        max_iterations=max_iterations,
-        max_llm_calls=max_llm_calls,
-        sub_lm=sub_lm,
-        verbose=False,
-    )
+    meta = metadata or {}
+    met = metrics or {}
+    guid = guidance.strip()
+
+    history_start = len(lm.history)
     with dspy.context(lm=lm):
-        try:
-            result = rlm(
-                transcript=transcript,
-                metadata=metadata or {},
-                metrics=metrics or {},
-                guidance=guidance.strip(),
+        if len(windows) == 1:
+            # Single window: direct summarization
+            result = dspy.ChainOfThought(TraceSummarySignature)(
+                transcript=windows[0], metadata=meta, metrics=met, guidance=guid
             )
-        except Exception:
-            predictor = dspy.Predict(TraceSummarySignature)
-            result = predictor(
-                transcript=transcript,
-                metadata=metadata or {},
-                metrics=metrics or {},
-                guidance=guidance.strip(),
+        else:
+            # Multiple windows: partial summaries then merge
+            partials: list[dict] = []
+            window_summarizer = dspy.ChainOfThought(WindowSummarySignature)
+            for i, window in enumerate(windows):
+                partial_result = window_summarizer(
+                    transcript=window,
+                    metadata=meta,
+                    window_index=i,
+                    total_windows=len(windows),
+                )
+                partial = getattr(partial_result, "partial", None)
+                if isinstance(partial, PartialSummary):
+                    partials.append(partial.model_dump(mode="json"))
+                elif isinstance(partial, dict):
+                    partials.append(partial)
+            result = dspy.ChainOfThought(TraceSummaryMergeSignature)(
+                partial_summaries=partials,
+                metadata=meta,
+                metrics=met,
+                guidance=guid,
             )
+    capture_dspy_cost(lm, history_start)
+
     payload = getattr(result, "summary_payload", None)
     if isinstance(payload, TraceSummaryCandidate):
         candidate = payload
@@ -208,10 +250,11 @@ def summarize_trace_from_session_file(
     if not session_file_path.exists() or not session_file_path.is_file():
         raise FileNotFoundError(f"session_file_missing:{session_file_path}")
     transcript = session_file_path.read_text(encoding="utf-8")
-    session_metadata = {**(metadata or {}), "raw_trace_path": str(session_file_path)}
-    return _summarize_trace_with_rlm(
+    meta = metadata or {}
+    meta.setdefault("raw_trace_path", str(session_file_path))
+    return _summarize_trace(
         transcript,
-        metadata=session_metadata,
+        metadata=meta,
         metrics=metrics,
         guidance=guidance,
     )

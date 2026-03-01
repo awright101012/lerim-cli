@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-03-01
+
+### Added
+
+- Per-run LLM cost tracking via OpenRouter's `usage.cost` response field. Cost (USD) logged in `activity.log` and returned in sync/maintain/ask result payloads.
+- Chronological (oldest-first) session processing for correct memory ordering.
+
+### Changed
+
+- Structured `write_memory` tool replaces raw markdown writes for memory files.
+- `_process_claimed_jobs` runs sequentially (was parallel) for chronological memory consistency.
+- Activity log format now includes cost column.
+
 ## [0.1.0] - 2026-02-28
 
 ### Added
@@ -18,12 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP API: `/api/health`, `/api/ask`, `/api/sync`, `/api/maintain`, `/api/status`, `/api/connect`, `/api/project/*`.
 - `[agents]`, `[projects]`, and `[providers]` config sections in `config.toml`.
 - Provider API base URLs configurable via `[providers]` section (no more hardcoded URLs).
-- `Dockerfile` with Python 3.12 + Deno, health check, `lerim serve` entrypoint.
+- `Dockerfile` with Python 3.12, health check, `lerim serve` entrypoint.
 - Same-path volume mounting for zero path translation between host and container.
 - Continual learning layer for coding agents and projects.
 - Platform adapters for Claude Code, Codex CLI, Cursor, and OpenCode.
-- Memory extraction pipeline using DSPy RLM to extract decisions and learnings from coding session traces.
-- Trace summarization pipeline using DSPy RLM to produce structured summaries with YAML frontmatter.
+- Memory extraction pipeline using DSPy ChainOfThought with transcript windowing to extract decisions and learnings from coding session traces.
+- Trace summarization pipeline using DSPy ChainOfThought with transcript windowing to produce structured summaries with YAML frontmatter.
 - PydanticAI lead agent with a read-only explorer subagent for memory operations.
 - Three CLI flows: `sync` (extract, summarize, write memories), `maintain` (merge, archive, decay), and `ask` (query memories).
 - Daemon mode for continuous sync and maintain loop.

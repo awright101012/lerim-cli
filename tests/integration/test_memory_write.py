@@ -81,7 +81,7 @@ def _fake_run_agent_once(
         json.dumps(report, ensure_ascii=True, indent=2) + "\n",
         encoding="utf-8",
     )
-    return "ok", "session-1"
+    return "ok", "session-1", 0.0
 
 
 @pytest.mark.integration
@@ -121,4 +121,5 @@ def test_sync_result_shape_keys_are_stable(tmp_path: Path) -> None:
         "counts",
         "written_memory_paths",
         "summary_path",
+        "cost_usd",
     }

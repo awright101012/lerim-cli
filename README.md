@@ -59,7 +59,7 @@ Lerim is file-first and primitive-first.
 - Global fallback memory: `~/.lerim/`
 - Search default: `files` (no index required)
 - Orchestration runtime: `pydantic-ai` lead agent + read-only explorer subagent
-- Extraction/summarization: `dspy.RLM` role-configured models (default OpenRouter `x-ai/grok-4.1-fast`)
+- Extraction/summarization: `dspy.ChainOfThought` with transcript windowing, role-configured models (default OpenRouter `openai/gpt-5-nano`, 300K window)
 - Graph source of truth: explicit id/slug references (and `related` when present)
 
 This keeps memory readable by humans and easy for agents to traverse.
@@ -137,7 +137,6 @@ Your agent will run `lerim ask` or `lerim memory search` to pull in past decisio
 If you prefer not to use Docker, Lerim works directly:
 
 ```bash
-brew install deno              # required for extraction
 lerim connect auto             # detect agent platforms
 lerim daemon                   # run sync + maintain in terminal
 ```
@@ -235,8 +234,8 @@ Default role model config (from `src/lerim/config/default.toml`):
 
 - `lead`: `provider=openrouter`, `model=x-ai/grok-4.1-fast`
 - `explorer`: `provider=openrouter`, `model=x-ai/grok-4.1-fast`
-- `extract`: `provider=openrouter`, `model=x-ai/grok-4.1-fast`, `sub_model=x-ai/grok-4.1-fast`
-- `summarize`: `provider=openrouter`, `model=x-ai/grok-4.1-fast`, `sub_model=x-ai/grok-4.1-fast`
+- `extract`: `provider=openrouter`, `model=openai/gpt-5-nano`, `max_window_tokens=300000`
+- `summarize`: `provider=openrouter`, `model=openai/gpt-5-nano`, `max_window_tokens=300000`
 
 ### Tracing (OpenTelemetry)
 

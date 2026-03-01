@@ -23,7 +23,7 @@ def test_summarize_trace_from_session_file_returns_frontmatter_fields(
 
     monkeypatch.setattr(
         pipeline,
-        "_summarize_trace_with_rlm",
+        "_summarize_trace",
         lambda *_args, **_kwargs: {
             "title": "Queue stability summary",
             "description": "Session addressed duplicate queue claims.",
@@ -64,8 +64,9 @@ def test_summarize_trace_from_session_file_raises_on_missing_file(tmp_path) -> N
 
 
 def test_summarization_pipeline_module_is_memory_boundary() -> None:
+    """Summarization pipeline must not import memory repo or agent internals."""
     source = Path(pipeline.__file__).read_text(encoding="utf-8")
-    assert "dspy.RLM" in source
+    assert "dspy.ChainOfThought" in source
     assert "MemoryRepository" not in source
     assert "search_memory" not in source
     assert "LerimAgent" not in source

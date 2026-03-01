@@ -830,26 +830,26 @@ def _serialize_full_config(config: Config) -> dict[str, Any]:
             "model": role.model,
             "api_base": getattr(role, "api_base", ""),
             "timeout_seconds": role.timeout_seconds,
-            "max_iterations": role.max_iterations,
             "openrouter_provider_order": list(
                 getattr(role, "openrouter_provider_order", ())
             ),
         }
+        if hasattr(role, "max_iterations"):
+            base["max_iterations"] = role.max_iterations
         if hasattr(role, "fallback_models"):
             base["fallback_models"] = list(role.fallback_models)
-        if hasattr(role, "sub_model"):
-            base["sub_model"] = role.sub_model
-        if hasattr(role, "sub_provider"):
-            base["sub_provider"] = role.sub_provider
-        if hasattr(role, "max_llm_calls"):
-            base["max_llm_calls"] = role.max_llm_calls
+        if hasattr(role, "max_window_tokens"):
+            base["max_window_tokens"] = role.max_window_tokens
+        if hasattr(role, "window_overlap_tokens"):
+            base["window_overlap_tokens"] = role.window_overlap_tokens
         return base
 
     return {
         "server": {
             "host": config.server_host,
             "port": config.server_port,
-            "poll_interval_minutes": config.poll_interval_minutes,
+            "sync_interval_minutes": config.sync_interval_minutes,
+            "maintain_interval_minutes": config.maintain_interval_minutes,
             "sync_window_days": config.sync_window_days,
             "sync_max_sessions": config.sync_max_sessions,
             "sync_max_workers": config.sync_max_workers,
@@ -1212,10 +1212,14 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             limit = int(body.get("limit") or 12)
             import threading
 
+            from logfire.propagate import attach_context, get_context
+
+            otel_ctx = get_context()
             result_holder: list[dict[str, Any]] = []
 
             def _run_ask() -> None:
                 """Execute ask in background thread."""
+                attach_context(otel_ctx)
                 result_holder.append(api_ask(question, limit=limit))
 
             thread = threading.Thread(target=_run_ask)
@@ -1231,10 +1235,14 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             import threading
             import uuid
 
+            from logfire.propagate import attach_context, get_context
+
+            otel_ctx = get_context()
             job_id = str(uuid.uuid4())[:8]
 
             def _run_sync() -> None:
                 """Execute sync in background."""
+                attach_context(otel_ctx)
                 api_sync(
                     agent=body.get("agent"),
                     window=body.get("window", "7d"),
@@ -1253,10 +1261,14 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             import threading
             import uuid
 
+            from logfire.propagate import attach_context, get_context
+
+            otel_ctx = get_context()
             job_id = str(uuid.uuid4())[:8]
 
             def _run_maintain() -> None:
                 """Execute maintain in background."""
+                attach_context(otel_ctx)
                 api_maintain(
                     force=bool(body.get("force")),
                     dry_run=bool(body.get("dry_run")),
