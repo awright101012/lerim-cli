@@ -1,0 +1,191 @@
+/* Custom CSS for Lerim docs — enriches MkDocs Material with
+   step indicators, parameter fields, hero sections, and feature grids. */
+
+/* ── Hero section on landing page ── */
+.hero {
+  text-align: center;
+  padding: 2rem 0 1rem;
+}
+.hero h1 {
+  font-size: 2.4rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.hero .hero-subtitle {
+  font-size: 1.2rem;
+  color: var(--md-default-fg-color--light);
+  max-width: 640px;
+  margin: 0 auto 1.5rem;
+  line-height: 1.6;
+}
+
+/* ── Numbered steps ── */
+.steps {
+  counter-reset: step-counter;
+  padding-left: 0;
+  list-style: none;
+}
+.steps > li,
+.steps > .step {
+  counter-increment: step-counter;
+  position: relative;
+  padding-left: 3.2rem;
+  margin-bottom: 2rem;
+  border-left: 2px solid var(--md-primary-fg-color);
+  padding-bottom: 0.5rem;
+}
+.steps > li::before,
+.steps > .step::before {
+  content: counter(step-counter);
+  position: absolute;
+  left: -0.9rem;
+  top: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  background: var(--md-primary-fg-color);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.steps > li h3,
+.steps > .step h3 {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+/* ── Parameter field styling ── */
+.param-field {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  padding: 1rem 1.2rem;
+  margin-bottom: 0.75rem;
+  background: var(--md-code-bg-color);
+}
+.param-field .param-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.param-field .param-name {
+  font-family: var(--md-code-font-family);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--md-primary-fg-color);
+}
+.param-field .param-type {
+  font-family: var(--md-code-font-family);
+  font-size: 0.8rem;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-fg-color--lightest);
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.25rem;
+}
+.param-field .param-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.25rem;
+}
+.param-field .param-badge.required {
+  background: #e53935;
+  color: white;
+}
+.param-field .param-badge.default {
+  background: var(--md-default-fg-color--lightest);
+  color: var(--md-default-fg-color--light);
+}
+.param-field .param-desc {
+  font-size: 0.9rem;
+  color: var(--md-default-fg-color--light);
+  margin: 0;
+}
+
+/* ── Feature grid ── */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+.feature-grid .feature-item {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+  padding: 1.2rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.feature-grid .feature-item:hover {
+  border-color: var(--md-primary-fg-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.feature-grid .feature-item h4 {
+  margin-top: 0;
+  margin-bottom: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.feature-grid .feature-item p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* ── Card links (used for "Next steps" / "Related" sections) ── */
+.md-typeset .grid.cards > ul > li {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--md-primary-fg-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+.md-typeset .grid.cards > ul > li a {
+  text-decoration: none;
+}
+
+/* ── Status badges ── */
+.status-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status-badge.supported {
+  background: #c8e6c9;
+  color: #2e7d32;
+}
+.status-badge.planned {
+  background: #fff9c4;
+  color: #f57f17;
+}
+
+/* ── Code block enhancements ── */
+.md-typeset pre > code {
+  font-size: 0.85rem;
+}
+
+/* ── Section dividers ── */
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+  margin: 2.5rem 0;
+}
+
+/* ── Responsive adjustments ── */
+@media (max-width: 768px) {
+  .hero h1 {
+    font-size: 1.8rem;
+  }
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}

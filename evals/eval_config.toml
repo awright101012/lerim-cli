@@ -5,9 +5,9 @@
 agent = "claude"  # "claude" | "codex" | "opencode"
 
 [extraction]
-provider = "openrouter"
-model = "qwen/qwen3-coder-30b-a3b-instruct"
+provider = "minimax"
+model = "MiniMax-M2.5"
 
 [summarization]
-provider = "openrouter"
-model = "qwen/qwen3-coder-30b-a3b-instruct"
+provider = "minimax"
+model = "MiniMax-M2.5"
