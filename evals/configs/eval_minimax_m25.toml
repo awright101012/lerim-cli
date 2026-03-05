@@ -1,0 +1,11 @@
+# Eval config — MiniMax M2.5 cloud baseline.
+[judge]
+agent = "claude"
+
+[extraction]
+provider = "minimax"
+model = "MiniMax-M2.5"
+
+[summarization]
+provider = "minimax"
+model = "MiniMax-M2.5"

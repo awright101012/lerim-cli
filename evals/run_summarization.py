@@ -43,6 +43,7 @@ def _configure_dspy_from_eval(config: dict) -> None:
             "summarize": {
                 "provider": section.get("provider", "openrouter"),
                 "model": section.get("model", "qwen/qwen3-coder-30b-a3b-instruct"),
+                "thinking": section.get("thinking", True),
             }
         }
     }
@@ -189,7 +190,9 @@ def run_summarization_eval(config_path: Path) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run summarization eval")
     parser.add_argument(
-        "--config", default="evals/eval_config.toml", help="Path to eval config TOML"
+        "--config",
+        default="evals/eval_config.toml",
+        help="Path to eval config TOML (see evals/configs/ for examples)",
     )
     args = parser.parse_args()
     run_summarization_eval(Path(args.config))
