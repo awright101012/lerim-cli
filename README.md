@@ -137,6 +137,16 @@ lerim connect auto             # detect agent platforms
 lerim serve                    # run HTTP server + daemon loop
 ```
 
+### Local models (Ollama)
+
+Lerim works with local models via [Ollama](https://ollama.com). Set `provider = "ollama"` in your role config and Lerim will automatically load models into GPU/RAM before each sync/maintain cycle and unload them after to free memory (`auto_unload = true` in `[providers]`).
+
+```bash
+ollama serve                   # start Ollama (runs outside Docker)
+```
+
+For Docker deployments, set `ollama = "http://host.docker.internal:11434"` in `[providers]` so the container can reach the host Ollama instance. See [model roles](https://docs.lerim.dev/configuration/model-roles/) for full configuration.
+
 ## Dashboard
 
 The dashboard gives you a local UI for session analytics, memory browsing, and runtime status.
