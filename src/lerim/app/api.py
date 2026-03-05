@@ -85,6 +85,8 @@ def api_sync(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Run one sync cycle and return summary dict."""
+    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
+
     config = get_config()
     window_start, window_end = resolve_window_bounds(
         window=window or f"{config.sync_window_days}d",
@@ -92,24 +94,29 @@ def api_sync(
         until_raw=None,
         parse_duration_to_seconds=parse_duration_to_seconds,
     )
-    code, summary = run_sync_once(
-        run_id=None,
-        agent_filter=parse_agent_filter(agent) if agent else None,
-        no_extract=False,
-        force=force,
-        max_sessions=max_sessions or config.sync_max_sessions,
-        dry_run=dry_run,
-        ignore_lock=False,
-        trigger="api",
-        window_start=window_start,
-        window_end=window_end,
-    )
+    with ollama_lifecycle(config):
+        code, summary = run_sync_once(
+            run_id=None,
+            agent_filter=parse_agent_filter(agent) if agent else None,
+            no_extract=False,
+            force=force,
+            max_sessions=max_sessions or config.sync_max_sessions,
+            dry_run=dry_run,
+            ignore_lock=False,
+            trigger="api",
+            window_start=window_start,
+            window_end=window_end,
+        )
     return {"code": code, **asdict(summary)}
 
 
 def api_maintain(force: bool = False, dry_run: bool = False) -> dict[str, Any]:
     """Run one maintain cycle and return result dict."""
-    code, payload = run_maintain_once(force=force, dry_run=dry_run)
+    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
+
+    config = get_config()
+    with ollama_lifecycle(config):
+        code, payload = run_maintain_once(force=force, dry_run=dry_run)
     return {"code": code, **payload}
 
 
@@ -350,6 +357,8 @@ services:
     restart: "no"
     ports:
       - "127.0.0.1:{port}:{port}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
 {env_block}
     volumes:

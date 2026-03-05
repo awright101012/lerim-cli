@@ -7,8 +7,9 @@ from typing import Literal
 
 import dspy
 from pydantic_ai.models.fallback import FallbackModel
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
+from pydantic_ai.providers.litellm import LiteLLMProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
@@ -85,6 +86,7 @@ def _build_single_orchestration_model(
     api_base: str,
     config: Config,
     openrouter_provider_order: tuple[str, ...] = (),
+    thinking: bool = True,
 ):
     """Build one PydanticAI model object for a provider/model pair."""
     provider_name = provider.strip().lower()
@@ -102,12 +104,34 @@ def _build_single_orchestration_model(
             model_name=model, provider=provider_obj, settings=settings
         )
     if provider_name == "ollama":
+        if not thinking:
+            # Route through LiteLLM proxy to access Ollama's native /api/chat
+            # which supports think:false. The /v1 endpoint ignores it.
+            proxy_base = _default_api_base("litellm_proxy", config)
+            litellm_provider = LiteLLMProvider(
+                api_base=proxy_base,
+                api_key="sk-litellm",
+            )
+            return OpenAIChatModel(
+                model_name=f"ollama_chat/{model}",
+                provider=litellm_provider,
+                settings=OpenAIChatModelSettings(
+                    openai_reasoning_effort="none",
+                ),
+            )
         ollama_base = api_base or _default_api_base("ollama", config)
         provider_obj = OpenAIProvider(
             api_key="ollama",
             base_url=f"{ollama_base}/v1"
             if not ollama_base.endswith("/v1")
             else ollama_base,
+        )
+        return OpenAIChatModel(model_name=model, provider=provider_obj)
+    if provider_name == "mlx":
+        mlx_base = api_base or _default_api_base("mlx", config)
+        provider_obj = OpenAIProvider(
+            api_key="mlx",
+            base_url=f"{mlx_base}/v1" if not mlx_base.endswith("/v1") else mlx_base,
         )
         return OpenAIChatModel(model_name=model, provider=provider_obj)
     if provider_name in {"zai", "openai", "minimax"}:
@@ -143,6 +167,7 @@ def build_orchestration_model_from_role(
         api_base=role_cfg.api_base,
         config=cfg,
         openrouter_provider_order=role_cfg.openrouter_provider_order,
+        thinking=role_cfg.thinking,
     )
     fallback_specs = [parse_fallback_spec(item) for item in role_cfg.fallback_models]
     if not fallback_specs:
@@ -154,6 +179,7 @@ def build_orchestration_model_from_role(
             api_base="",
             config=cfg,
             openrouter_provider_order=role_cfg.openrouter_provider_order,
+            thinking=role_cfg.thinking,
         )
         for item in fallback_specs
     ]
@@ -168,13 +194,24 @@ def _build_dspy_lm_for_provider(
     cfg: Config,
     role_label: str,
     openrouter_provider_order: tuple[str, ...] = (),
+    thinking: bool = True,
 ) -> dspy.LM:
     """Build a single DSPy LM object from provider/model/api_base."""
     if provider == "ollama":
-        return dspy.LM(
-            f"ollama_chat/{model}",
+        kwargs: dict = dict(
             api_key="ollama",
             api_base=api_base or _default_api_base("ollama"),
+            cache=False,
+            max_tokens=16000,
+        )
+        if not thinking:
+            kwargs["reasoning_effort"] = "none"
+        return dspy.LM(f"ollama_chat/{model}", **kwargs)
+    if provider == "mlx":
+        return dspy.LM(
+            f"openai/{model}",
+            api_key="mlx",
+            api_base=api_base or _default_api_base("mlx"),
             cache=False,
             max_tokens=16000,
         )
@@ -197,7 +234,11 @@ def _build_dspy_lm_for_provider(
         )
     if provider in {"zai", "openai", "minimax"}:
         api_key = _api_key_for_provider(cfg, provider)
-        env_name = {"zai": "ZAI_API_KEY", "openai": "OPENAI_API_KEY", "minimax": "MINIMAX_API_KEY"}[provider]
+        env_name = {
+            "zai": "ZAI_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "minimax": "MINIMAX_API_KEY",
+        }[provider]
         if not api_key:
             raise RuntimeError(f"missing_api_key:{env_name} required for {role_label}")
         return dspy.LM(
@@ -229,6 +270,7 @@ def build_dspy_lm(
         cfg=cfg,
         role_label=f"roles.{role}.provider={role_cfg.provider}",
         openrouter_provider_order=role_cfg.openrouter_provider_order,
+        thinking=role_cfg.thinking,
     )
 
 
@@ -245,6 +287,11 @@ def list_provider_models(provider: str) -> list[str]:
         ],
         "openai": ["gpt-5-mini", "gpt-5"],
         "ollama": ["qwen3:8b", "qwen3:4b", "qwen3:14b"],
+        "mlx": [
+            "mlx-community/Qwen3.5-9B-4bit",
+            "mlx-community/Qwen3.5-27B-4bit",
+            "mlx-community/Qwen3.5-35B-A3B-4bit",
+        ],
     }
     return list(options.get(normalized, []))
 

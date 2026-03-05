@@ -85,7 +85,9 @@ def make_config(base: Path) -> Config:
             "openai": "https://api.openai.com/v1",
             "openrouter": "https://openrouter.ai/api/v1",
             "ollama": "http://127.0.0.1:11434",
+            "mlx": "http://127.0.0.1:8000/v1",
         },
+        auto_unload=True,
         agents={},
         projects={},
     )

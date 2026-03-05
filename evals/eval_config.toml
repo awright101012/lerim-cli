@@ -1,5 +1,6 @@
-# Eval configuration — per-pipeline LLM settings and judge choice.
-# Create multiple configs (eval_cheap.toml, eval_premium.toml) and compare results.
+# Default eval configuration.
+# Copy this file to evals/configs/ and customize for model comparison.
+# See docs/evals.md for full reference.
 
 [judge]
 agent = "claude"  # "claude" | "codex" | "opencode"
@@ -7,7 +8,9 @@ agent = "claude"  # "claude" | "codex" | "opencode"
 [extraction]
 provider = "minimax"
 model = "MiniMax-M2.5"
+thinking = true
 
 [summarization]
 provider = "minimax"
 model = "MiniMax-M2.5"
+thinking = true

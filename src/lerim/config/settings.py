@@ -41,6 +41,7 @@ class LLMRoleConfig:
     timeout_seconds: int
     max_iterations: int
     openrouter_provider_order: tuple[str, ...]
+    thinking: bool = True
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class DSPyRoleConfig:
     max_window_tokens: int
     window_overlap_tokens: int
     openrouter_provider_order: tuple[str, ...]
+    thinking: bool = True
 
 
 def load_toml_file(path: Path | None) -> dict[str, Any]:
@@ -278,6 +280,7 @@ class Config:
     minimax_api_key: str | None
 
     provider_api_bases: dict[str, str]
+    auto_unload: bool
 
     agents: dict[str, str]
     projects: dict[str, str]
@@ -382,6 +385,7 @@ class Config:
             "tracing_include_httpx": self.tracing_include_httpx,
             "tracing_include_content": self.tracing_include_content,
             "provider_api_bases": dict(self.provider_api_bases),
+            "auto_unload": self.auto_unload,
             "agents": dict(self.agents),
             "projects": dict(self.projects),
         }
@@ -413,6 +417,7 @@ def _build_llm_role(
         openrouter_provider_order=_to_string_tuple(
             raw.get("openrouter_provider_order")
         ),
+        thinking=bool(raw.get("thinking", True)),
     )
 
 
@@ -432,6 +437,7 @@ def _build_dspy_role(
         openrouter_provider_order=_to_string_tuple(
             raw.get("openrouter_provider_order")
         ),
+        thinking=bool(raw.get("thinking", True)),
     )
 
 
@@ -609,13 +615,13 @@ def load_config() -> Config:
         zai_api_key=_to_non_empty_string(os.environ.get("ZAI_API_KEY")) or None,
         openrouter_api_key=_to_non_empty_string(os.environ.get("OPENROUTER_API_KEY"))
         or None,
-        minimax_api_key=_to_non_empty_string(os.environ.get("MINIMAX_API_KEY"))
-        or None,
+        minimax_api_key=_to_non_empty_string(os.environ.get("MINIMAX_API_KEY")) or None,
         provider_api_bases=_parse_string_table(
             toml_data.get("providers", {})
             if isinstance(toml_data.get("providers"), dict)
             else {}
         ),
+        auto_unload=bool((toml_data.get("providers") or {}).get("auto_unload", True)),
         agents=agents,
         projects=projects,
     )

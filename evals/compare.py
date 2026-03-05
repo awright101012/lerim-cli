@@ -48,7 +48,9 @@ def compare_results(pipeline_filter: str | None = None) -> None:
         groups.setdefault(pipeline, []).append(data)
 
     if not groups:
-        print(f"No results found{f' for pipeline={pipeline_filter}' if pipeline_filter else ''}.")
+        print(
+            f"No results found{f' for pipeline={pipeline_filter}' if pipeline_filter else ''}."
+        )
         return
 
     for pipeline, runs in sorted(groups.items()):
@@ -69,21 +71,29 @@ def compare_results(pipeline_filter: str | None = None) -> None:
             avg_time = perf.get("avg_time_per_trace_s", 0)
 
             if is_extraction:
-                print(f"{label:<40} {scores.get('schema_ok', 0):>6.2f} "
-                      f"{scores.get('completeness', 0):>6.2f} {scores.get('faithfulness', 0):>6.2f} "
-                      f"{scores.get('clarity', 0):>6.2f} {scores.get('composite', 0):>6.2f} "
-                      f"{avg_time:>6.1f}s")
+                print(
+                    f"{label:<40} {scores.get('schema_ok', 0):>6.2f} "
+                    f"{scores.get('completeness', 0):>6.2f} {scores.get('faithfulness', 0):>6.2f} "
+                    f"{scores.get('clarity', 0):>6.2f} {scores.get('composite', 0):>6.2f} "
+                    f"{avg_time:>6.1f}s"
+                )
             else:
-                print(f"{label:<40} {scores.get('fields_present', 0):>6.2f} "
-                      f"{scores.get('word_limits', 0):>6.2f} {scores.get('completeness', 0):>6.2f} "
-                      f"{scores.get('faithfulness', 0):>6.2f} {scores.get('clarity', 0):>6.2f} "
-                      f"{scores.get('composite', 0):>6.2f} {avg_time:>6.1f}s")
+                print(
+                    f"{label:<40} {scores.get('fields_present', 0):>6.2f} "
+                    f"{scores.get('word_limits', 0):>6.2f} {scores.get('completeness', 0):>6.2f} "
+                    f"{scores.get('faithfulness', 0):>6.2f} {scores.get('clarity', 0):>6.2f} "
+                    f"{scores.get('composite', 0):>6.2f} {avg_time:>6.1f}s"
+                )
 
         print()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare eval results")
-    parser.add_argument("--pipeline", choices=["extraction", "summarization"], help="Filter by pipeline")
+    parser.add_argument(
+        "--pipeline",
+        choices=["extraction", "summarization", "sync", "maintain"],
+        help="Filter by pipeline",
+    )
     args = parser.parse_args()
     compare_results(args.pipeline)

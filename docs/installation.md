@@ -117,6 +117,37 @@ lerim serve                  # start API server + dashboard + daemon loop
 
 Then use `lerim ask`, `lerim sync`, `lerim status`, etc. as usual — they connect to the running server.
 
+## Local models (Ollama)
+
+To use local models instead of cloud APIs:
+
+1. Install Ollama: [ollama.com](https://ollama.com)
+2. Pull a model: `ollama pull qwen3.5:9b-q8_0`
+3. Make sure Ollama is running: `ollama serve` (or the macOS background service)
+4. Configure Lerim roles to use Ollama:
+
+```toml
+# ~/.lerim/config.toml
+[roles.lead]
+provider = "ollama"
+model = "qwen3.5:9b-q8_0"
+
+[roles.extract]
+provider = "ollama"
+model = "qwen3.5:9b-q8_0"
+```
+
+Lerim automatically loads models into RAM before each sync/maintain cycle and
+unloads them immediately after, so the model only uses memory during active
+processing. No API keys required.
+
+If running Lerim in Docker with Ollama on the host:
+
+```toml
+[providers]
+ollama = "http://host.docker.internal:11434"
+```
+
 ## Troubleshooting
 
 ### Docker not found

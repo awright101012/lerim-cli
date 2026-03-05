@@ -677,6 +677,8 @@ def run_maintain_once(
 
 def run_daemon_once(max_sessions: int | None = None) -> dict:
     """Run one bounded daemon cycle: sync then maintain."""
+    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
+
     config = get_config()
     effective_max = max_sessions or config.sync_max_sessions
     window_start, window_end = resolve_window_bounds(
@@ -686,22 +688,23 @@ def run_daemon_once(max_sessions: int | None = None) -> dict:
         parse_duration_to_seconds=parse_duration_to_seconds,
     )
 
-    sync_code, sync_summary = run_sync_once(
-        run_id=None,
-        agent_filter=None,
-        no_extract=False,
-        force=False,
-        max_sessions=effective_max,
-        dry_run=False,
-        ignore_lock=False,
-        trigger="daemon",
-        window_start=window_start,
-        window_end=window_end,
-    )
-    maintain_code, maintain_data = run_maintain_once(
-        force=False,
-        dry_run=False,
-    )
+    with ollama_lifecycle(config):
+        sync_code, sync_summary = run_sync_once(
+            run_id=None,
+            agent_filter=None,
+            no_extract=False,
+            force=False,
+            max_sessions=effective_max,
+            dry_run=False,
+            ignore_lock=False,
+            trigger="daemon",
+            window_start=window_start,
+            window_end=window_end,
+        )
+        maintain_code, maintain_data = run_maintain_once(
+            force=False,
+            dry_run=False,
+        )
     return {
         "sync_code": sync_code,
         "sync_summary": sync_summary.__dict__,
@@ -776,6 +779,8 @@ def run_daemon_forever(poll_seconds: int | None = None) -> None:
 
 def _run_sync_cycle() -> tuple[int, SyncSummary]:
     """Execute one sync cycle using current config window bounds."""
+    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
+
     config = get_config()
     window_start, window_end = resolve_window_bounds(
         window=f"{config.sync_window_days}d",
@@ -783,23 +788,28 @@ def _run_sync_cycle() -> tuple[int, SyncSummary]:
         until_raw=None,
         parse_duration_to_seconds=parse_duration_to_seconds,
     )
-    return run_sync_once(
-        run_id=None,
-        agent_filter=None,
-        no_extract=False,
-        force=False,
-        max_sessions=config.sync_max_sessions,
-        dry_run=False,
-        ignore_lock=False,
-        trigger="daemon",
-        window_start=window_start,
-        window_end=window_end,
-    )
+    with ollama_lifecycle(config):
+        return run_sync_once(
+            run_id=None,
+            agent_filter=None,
+            no_extract=False,
+            force=False,
+            max_sessions=config.sync_max_sessions,
+            dry_run=False,
+            ignore_lock=False,
+            trigger="daemon",
+            window_start=window_start,
+            window_end=window_end,
+        )
 
 
 def _run_maintain_cycle() -> tuple[int, dict]:
     """Execute one maintain cycle."""
-    return run_maintain_once(force=False, dry_run=False, trigger="daemon")
+    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
+
+    config = get_config()
+    with ollama_lifecycle(config):
+        return run_maintain_once(force=False, dry_run=False, trigger="daemon")
 
 
 if __name__ == "__main__":

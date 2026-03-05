@@ -543,6 +543,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         """Background daemon loop with independent sync and maintain intervals."""
         from lerim.app.arg_utils import parse_duration_to_seconds as _parse_dur
         from lerim.config.logging import logger
+        from lerim.runtime.ollama_lifecycle import ollama_lifecycle
 
         sync_interval = max(config.sync_interval_minutes * 60, 30)
         maintain_interval = max(config.maintain_interval_minutes * 60, 30)
@@ -573,18 +574,19 @@ def _cmd_serve(args: argparse.Namespace) -> int:
                         until_raw=None,
                         parse_duration_to_seconds=_parse_dur,
                     )
-                    _code, summary = run_sync_once(
-                        run_id=None,
-                        agent_filter=None,
-                        no_extract=False,
-                        force=False,
-                        max_sessions=config.sync_max_sessions,
-                        dry_run=False,
-                        ignore_lock=False,
-                        trigger="daemon",
-                        window_start=window_start,
-                        window_end=window_end,
-                    )
+                    with ollama_lifecycle(config):
+                        _code, summary = run_sync_once(
+                            run_id=None,
+                            agent_filter=None,
+                            no_extract=False,
+                            force=False,
+                            max_sessions=config.sync_max_sessions,
+                            dry_run=False,
+                            ignore_lock=False,
+                            trigger="daemon",
+                            window_start=window_start,
+                            window_end=window_end,
+                        )
                     logger.info(
                         "daemon sync done — indexed={} extracted={} skipped={} failed={}",
                         summary.indexed_sessions,
@@ -598,11 +600,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
             if now - last_maintain >= maintain_interval:
                 try:
-                    _code, details = run_maintain_once(
-                        force=False,
-                        dry_run=False,
-                        trigger="daemon",
-                    )
+                    with ollama_lifecycle(config):
+                        _code, details = run_maintain_once(
+                            force=False,
+                            dry_run=False,
+                            trigger="daemon",
+                        )
                     logger.info("daemon maintain done — {}", details)
                 except Exception as exc:
                     logger.warning("daemon maintain error: {}", exc)
@@ -662,8 +665,11 @@ def _cmd_skill(args: argparse.Namespace) -> int:
         dest.mkdir(parents=True, exist_ok=True)
         for src in skill_files:
             (dest / src.name).write_text(src.read_text())
-        installed.append(f"~/.{label}/skills/lerim" if label != "agents"
-                         else "~/.agents/skills/lerim")
+        installed.append(
+            f"~/.{label}/skills/lerim"
+            if label != "agents"
+            else "~/.agents/skills/lerim"
+        )
 
     _emit(f"Installed lerim skill to: {', '.join(installed)}")
     _emit("  ~/.agents/skills/lerim  → Cursor, Codex, OpenCode, and others")

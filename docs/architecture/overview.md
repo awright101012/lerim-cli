@@ -49,6 +49,7 @@ describes the system design, components, and runtime boundaries.
 | **Adapters** | Python | Platform-specific session readers (Claude, Codex, Cursor, OpenCode) |
 | **HTTP API** | Starlette | JSON API for CLI, skills, agents, and dashboard UI |
 | **Dashboard** | HTML/JS | Local UI for session analytics, memory browsing, pipeline status |
+| **Ollama lifecycle** | httpx | Loads/unloads local models before and after each sync/maintain cycle to free GPU/RAM |
 
 ## Deployment model
 
@@ -184,6 +185,12 @@ Memory scope modes (via `[memory] scope`):
 4. Consolidates related memories
 5. Applies time-based confidence decay
 6. Creates new consolidated memories, soft-deletes to `archived/`
+
+!!! note "Local model lifecycle"
+    When roles use `provider = "ollama"`, the lifecycle context manager
+    warm-loads models before each cycle and unloads them after
+    (`keep_alive: 0`) to free 5-10 GB of RAM between runs. Disable
+    with `auto_unload = false` in `[providers]`.
 
 ### Query path (read-only)
 

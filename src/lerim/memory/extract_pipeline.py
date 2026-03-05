@@ -23,6 +23,20 @@ from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
 
 
+def _extraction_reward(_args, pred) -> float:
+    """Return 1.0 if primitives is a non-empty list of valid MemoryCandidate items."""
+    primitives = getattr(pred, "primitives", None)
+    if not isinstance(primitives, list) or not primitives:
+        return 0.0
+    for item in primitives:
+        if isinstance(item, dict):
+            try:
+                MemoryCandidate.model_validate(item)
+            except Exception:
+                return 0.0
+    return 1.0
+
+
 class MemoryExtractSignature(dspy.Signature):
     """Extract reusable memory candidates from this transcript segment.
 
@@ -87,7 +101,12 @@ def _extract_candidates(
     guid = guidance.strip()
 
     all_candidates: list[dict[str, Any]] = []
-    extractor = dspy.ChainOfThought(MemoryExtractSignature)
+    extractor = dspy.Refine(
+        dspy.ChainOfThought(MemoryExtractSignature),
+        N=1,
+        reward_fn=_extraction_reward,
+        threshold=1.0,
+    )
     history_start = len(lm.history)
     with dspy.context(lm=lm):
         for window in windows:
@@ -114,7 +133,12 @@ def _extract_candidates(
         return all_candidates
 
     # Multiple windows: merge and deduplicate
-    merger = dspy.ChainOfThought(MemoryMergeSignature)
+    merger = dspy.Refine(
+        dspy.ChainOfThought(MemoryMergeSignature),
+        N=1,
+        reward_fn=_extraction_reward,
+        threshold=1.0,
+    )
     with dspy.context(lm=lm):
         merge_result = merger(candidates=all_candidates, metadata=meta)
     capture_dspy_cost(lm, history_start)

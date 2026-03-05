@@ -1,0 +1,13 @@
+# Eval config — Ollama Qwen3.5 4B Q8_0 with thinking OFF.
+[judge]
+agent = "claude"
+
+[extraction]
+provider = "ollama"
+model = "qwen3.5:4b-q8_0"
+thinking = false
+
+[summarization]
+provider = "ollama"
+model = "qwen3.5:4b-q8_0"
+thinking = false
