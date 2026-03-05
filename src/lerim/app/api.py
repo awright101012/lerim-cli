@@ -357,6 +357,8 @@ services:
     restart: "no"
     ports:
       - "127.0.0.1:{port}:{port}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
 {env_block}
     volumes:
