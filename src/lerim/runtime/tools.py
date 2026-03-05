@@ -299,7 +299,10 @@ def write_file_tool(
 ) -> dict[str, Any]:
     """Write file content under guarded roots. Memory primitives are rejected — use write_memory_tool instead."""
     resolved = _resolve_path(file_path, _default_cwd(context))
-    _assert_write_boundary(resolved, context)
+    try:
+        _assert_write_boundary(resolved, context)
+    except RuntimeError as exc:
+        raise ModelRetry(str(exc)) from exc
     primitive_type = _memory_primitive_type(resolved, context.memory_root)
     if primitive_type is not None and primitive_type != MemoryType.summary:
         raise ModelRetry(
@@ -344,7 +347,24 @@ def write_memory_tool(
         raise RuntimeError("memory_root is not set")
     if primitive not in ("decision", "learning"):
         raise ModelRetry(
-            f"Invalid primitive '{primitive}'. Must be 'decision' or 'learning'."
+            f"Invalid primitive='{primitive}'. Must be exactly 'decision' or 'learning' (singular, lowercase). "
+            "Example: write_memory(primitive='decision', title='...', body='...', confidence=0.8)"
+        )
+    if not title or not title.strip():
+        raise ModelRetry(
+            "title cannot be empty. Provide a short descriptive title. "
+            "Example: 'Use SQLite for session indexing'"
+        )
+    if not (0.0 <= confidence <= 1.0):
+        raise ModelRetry(
+            f"confidence={confidence} out of range. Must be 0.0-1.0. Use 0.8 as default."
+        )
+    VALID_KINDS = {"insight", "procedure", "friction", "pitfall", "preference"}
+    if primitive == "learning" and (not kind or kind not in VALID_KINDS):
+        raise ModelRetry(
+            f"Learning memories require 'kind'. Got kind={kind!r}. "
+            f"Must be one of: {', '.join(sorted(VALID_KINDS))}. "
+            "Example: write_memory(primitive='learning', title='...', body='...', kind='insight')"
         )
     try:
         record = MemoryRecord(
@@ -358,7 +378,11 @@ def write_memory_tool(
             source=context.run_id,
         )
     except Exception as exc:
-        raise ModelRetry(f"Invalid memory fields: {exc}") from exc
+        raise ModelRetry(
+            f"Invalid memory fields: {exc}. "
+            "Required: primitive ('decision'|'learning'), title (non-empty string), body (non-empty string). "
+            "Optional: confidence (0.0-1.0, default 0.8), tags (list of strings), kind (required for learnings)."
+        ) from exc
 
     mem_type = MemoryType(record.primitive)
     folder = MEMORY_TYPE_FOLDERS[mem_type]
@@ -526,7 +550,7 @@ if __name__ == "__main__":
         except ModelRetry as exc:
             assert "write_memory" in str(exc)
 
-        # write_file_tool: boundary denial for outside paths
+        # write_file_tool: boundary denial for outside paths (now ModelRetry)
         try:
             write_file_tool(
                 context=context,
@@ -534,7 +558,7 @@ if __name__ == "__main__":
                 content="outside",
             )
             raise AssertionError("expected write boundary denial")
-        except RuntimeError as exc:
+        except ModelRetry as exc:
             assert "Cannot write" in str(exc) and "outside allowed roots" in str(exc)
 
     print("runtime tools: self-test passed")

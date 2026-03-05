@@ -133,7 +133,7 @@ def test_write_boundary_denies_outside(tmp_path):
     """write_file_tool raises for files outside allowed write roots."""
     ctx = _make_context(tmp_path)
     outside = tmp_path / "outside" / "hack.md"
-    with pytest.raises(RuntimeError, match="outside allowed roots"):
+    with pytest.raises(ModelRetry, match="outside allowed roots"):
         write_file_tool(context=ctx, file_path=str(outside), content="bad")
 
 

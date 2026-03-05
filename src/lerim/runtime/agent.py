@@ -13,7 +13,7 @@ from typing import Any
 
 import logfire
 from pydantic import BaseModel
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, UsageLimits
 
 from lerim.config.settings import Config, LLMRoleConfig, get_config
 from lerim.memory.access_tracker import get_access_stats, init_access_db
@@ -227,7 +227,7 @@ class LerimAgent:
 {self.system_prompt}
 Current mode: {mode}. \
 Always use tools to read/write files and produce concise completion output."""
-        retries = 2 if mode in {"sync", "maintain"} else 1
+        retries = 4 if mode in {"sync", "maintain"} else 1
         agent = Agent[
             RuntimeToolContext,
             str,
@@ -293,19 +293,13 @@ Always use tools to read/write files and produce concise completion output."""
         if "explore" in allowed_tools:
 
             @agent.tool
-            async def explore(
+            def explore(
                 ctx: RunContext[RuntimeToolContext],
                 query: str,
             ) -> str:
-                """Delegate read-only evidence gathering to explorer subagent.
-
-                Async so PydanticAI can run multiple explore calls in parallel
-                when the LLM emits them in the same tool-call turn (max 4).
-                """
+                """Delegate read-only evidence gathering to explorer subagent. Runs sequentially to avoid concurrent requests to local LLM servers."""
                 try:
-                    result = await get_explorer_agent().run(
-                        query, deps=ctx.deps, usage=ctx.usage
-                    )
+                    result = get_explorer_agent().run_sync(query, deps=ctx.deps)
                     return str(result.output or "")
                 except Exception as exc:
                     from lerim.config.logging import logger
@@ -424,7 +418,11 @@ Always use tools to read/write files and produce concise completion output."""
                     logger.info(
                         f"[{mode}] {role.provider}/{role.model} (fallback: {fallbacks}) attempt {attempt}/{max_attempts}"
                     )
-                    result = agent.run_sync(prompt, deps=context)
+                    result = agent.run_sync(
+                        prompt,
+                        deps=context,
+                        usage_limits=UsageLimits(request_limit=200),
+                    )
                     text = str(result.output or "").strip() or "(no response)"
                     return text, str(result.run_id), stop_cost_tracking()
                 except Exception as exc:

@@ -67,6 +67,22 @@ At most 200 words.""",
     )
 
 
+def _summarization_reward(_args, pred) -> float:
+    """Return 1.0 if summary_payload validates as TraceSummaryCandidate."""
+    payload = getattr(pred, "summary_payload", None)
+    if payload is None:
+        return 0.0
+    if isinstance(payload, TraceSummaryCandidate):
+        return 1.0
+    if isinstance(payload, dict):
+        try:
+            TraceSummaryCandidate.model_validate(payload)
+            return 1.0
+        except Exception:
+            return 0.0
+    return 0.0
+
+
 class PartialSummary(BaseModel):
     """Lightweight model for per-window partial summaries."""
 
@@ -157,7 +173,13 @@ def _summarize_trace(
     with dspy.context(lm=lm):
         if len(windows) == 1:
             # Single window: direct summarization
-            result = dspy.ChainOfThought(TraceSummarySignature)(
+            summarizer = dspy.Refine(
+                dspy.ChainOfThought(TraceSummarySignature),
+                N=1,
+                reward_fn=_summarization_reward,
+                threshold=1.0,
+            )
+            result = summarizer(
                 transcript=windows[0], metadata=meta, metrics=met, guidance=guid
             )
         else:
@@ -176,7 +198,13 @@ def _summarize_trace(
                     partials.append(partial.model_dump(mode="json"))
                 elif isinstance(partial, dict):
                     partials.append(partial)
-            result = dspy.ChainOfThought(TraceSummaryMergeSignature)(
+            merge_summarizer = dspy.Refine(
+                dspy.ChainOfThought(TraceSummaryMergeSignature),
+                N=1,
+                reward_fn=_summarization_reward,
+                threshold=1.0,
+            )
+            result = merge_summarizer(
                 partial_summaries=partials,
                 metadata=meta,
                 metrics=met,

@@ -41,6 +41,7 @@ class LLMRoleConfig:
     timeout_seconds: int
     max_iterations: int
     openrouter_provider_order: tuple[str, ...]
+    thinking: bool = True
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class DSPyRoleConfig:
     max_window_tokens: int
     window_overlap_tokens: int
     openrouter_provider_order: tuple[str, ...]
+    thinking: bool = True
 
 
 def load_toml_file(path: Path | None) -> dict[str, Any]:
@@ -413,6 +415,7 @@ def _build_llm_role(
         openrouter_provider_order=_to_string_tuple(
             raw.get("openrouter_provider_order")
         ),
+        thinking=bool(raw.get("thinking", True)),
     )
 
 
@@ -432,6 +435,7 @@ def _build_dspy_role(
         openrouter_provider_order=_to_string_tuple(
             raw.get("openrouter_provider_order")
         ),
+        thinking=bool(raw.get("thinking", True)),
     )
 
 
@@ -609,8 +613,7 @@ def load_config() -> Config:
         zai_api_key=_to_non_empty_string(os.environ.get("ZAI_API_KEY")) or None,
         openrouter_api_key=_to_non_empty_string(os.environ.get("OPENROUTER_API_KEY"))
         or None,
-        minimax_api_key=_to_non_empty_string(os.environ.get("MINIMAX_API_KEY"))
-        or None,
+        minimax_api_key=_to_non_empty_string(os.environ.get("MINIMAX_API_KEY")) or None,
         provider_api_bases=_parse_string_table(
             toml_data.get("providers", {})
             if isinstance(toml_data.get("providers"), dict)
