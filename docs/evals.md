@@ -345,6 +345,11 @@ The LiteLLM proxy must be running on port 4000 for think-off Ollama configs to w
 .venv/bin/litellm --model ollama_chat/qwen3.5:4b-q8_0 --port 4000 --api_base http://localhost:11434
 ```
 
+Note: In production (`lerim serve` / `lerim up`), Lerim automatically manages
+Ollama model loading and unloading via the `auto_unload` lifecycle. Evals bypass
+this — they assume Ollama is running and the model is available for the duration
+of the eval run.
+
 ## Benchmarking local models
 
 Before running pipeline evals with a local model, use `evals/scripts/bench_ollama.sh` to compare raw inference speed and memory usage across Ollama models. This helps pick the right model/quantization for your hardware.

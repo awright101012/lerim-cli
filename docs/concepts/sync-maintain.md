@@ -249,6 +249,17 @@ sync_window_days = 7                # look back 7 days for sessions
 sync_max_sessions = 50              # max sessions per sync cycle
 ```
 
+### Local model memory management
+
+When using Ollama (local models), Lerim automatically loads the model into RAM
+before each sync/maintain cycle and unloads it immediately after. This means the
+model (5-10 GB) only occupies memory during active processing, not between
+cycles. The Ollama process itself stays running with minimal footprint (~50-100 MB).
+
+This behavior is controlled by `auto_unload` in `[providers]` (default: `true`).
+Set `auto_unload = false` to keep models loaded between cycles for faster
+response at the cost of persistent RAM usage.
+
 ### Manual triggers
 
 You can also trigger either path manually via the CLI (requires `lerim serve` or `lerim up` running):

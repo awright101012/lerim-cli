@@ -138,12 +138,25 @@ model = "qwen3:32b"
 api_base = "http://127.0.0.1:11434"
 ```
 
-No API key required. Make sure Ollama is running locally. You can override the
-`api_base` per-role or set the default in `[providers]`:
+No API key required. Make sure Ollama is running locally (`ollama serve` or the
+macOS background service). Lerim automatically loads models into RAM before each
+sync/maintain cycle and unloads them immediately after, so the model only uses
+memory during active processing. Disable this with `auto_unload = false` in
+`[providers]`.
+
+Override the `api_base` per-role or set the default in `[providers]`:
 
 ```toml
 [providers]
 ollama = "http://127.0.0.1:11434"
+auto_unload = true   # free model RAM between cycles (default)
+```
+
+If Lerim runs in Docker and Ollama on the host, use `host.docker.internal`:
+
+```toml
+[providers]
+ollama = "http://host.docker.internal:11434"
 ```
 
 ### Use vllm-mlx (Apple Silicon local models)
