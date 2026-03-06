@@ -174,9 +174,10 @@ class LerimAgent:
         single_tools: list[str] | None = None,
         allowed_read_dirs: list[str | Path] | None = None,
         default_cwd: str | None = None,
+        config: Config | None = None,
     ) -> None:
         """Create runtime with role-based model wiring and tool policy defaults."""
-        config = get_config()
+        config = config or get_config()
         lead_role = config.lead_role
         resolved_timeout = timeout_seconds or lead_role.timeout_seconds
         role = LLMRoleConfig(
@@ -398,8 +399,8 @@ Always use tools to read/write files and produce concise completion output."""
         prompt: str,
         mode: str,
         context: RuntimeToolContext,
-    ) -> tuple[str, str, float]:
-        """Run one lead-agent prompt and return (response_text, run_id, cost_usd)."""
+    ) -> tuple[str, str, float, list]:
+        """Run one lead-agent prompt and return (response_text, run_id, cost_usd, messages)."""
         agent = self._build_lead_agent(mode)
         role = self.config.lead_role
         fallbacks = ", ".join(role.fallback_models) if role.fallback_models else "none"
@@ -424,7 +425,11 @@ Always use tools to read/write files and produce concise completion output."""
                         usage_limits=UsageLimits(request_limit=200),
                     )
                     text = str(result.output or "").strip() or "(no response)"
-                    return text, str(result.run_id), stop_cost_tracking()
+                    messages = [
+                        msg.model_dump() if hasattr(msg, "model_dump") else str(msg)
+                        for msg in result.all_messages()
+                    ]
+                    return text, str(result.run_id), stop_cost_tracking(), messages
                 except Exception as exc:
                     last_error = exc
                     error_type = type(exc).__name__
@@ -445,7 +450,7 @@ Always use tools to read/write files and produce concise completion output."""
                         wait_time = min(2**attempt, 8)
                         logger.info(f"[{mode}] Retrying in {wait_time}s...")
                         time.sleep(wait_time)
-            stop_cost_tracking()
+            stop_cost_tracking()  # stop tracking before raising
             raise RuntimeError(
                 f"[{mode}] Failed after {max_attempts} attempts. Last error: {last_error}"
             ) from last_error
@@ -485,7 +490,7 @@ Always use tools to read/write files and produce concise completion output."""
             run_id=session_id or self.generate_session_id(),
             config=self.config,
         )
-        response, resolved_session, cost_usd = self._run_agent_once(
+        response, resolved_session, cost_usd, _ = self._run_agent_once(
             prompt=prompt,
             mode="ask",
             context=context,
@@ -540,12 +545,16 @@ Always use tools to read/write files and produce concise completion output."""
             trace_path=trace_file,
             artifact_paths=artifact_paths,
         )
-        response, _, cost_usd = self._run_agent_once(
+        response, _, cost_usd, messages = self._run_agent_once(
             prompt=prompt,
             mode="sync",
             context=context,
         )
         _write_text_with_newline(artifact_paths["agent_log"], response)
+        agent_trace_path = run_folder / "agent_trace.json"
+        agent_trace_path.write_text(
+            json.dumps(messages, default=str, indent=2), encoding="utf-8"
+        )
 
         for key in ("extract", "summary", "memory_actions", "subagents_log"):
             if not artifact_paths[key].exists():
@@ -651,12 +660,16 @@ Always use tools to read/write files and produce concise completion output."""
             run_id=run_folder.name,
             config=self.config,
         )
-        response, _, cost_usd = self._run_agent_once(
+        response, _, cost_usd, messages = self._run_agent_once(
             prompt=prompt,
             mode="maintain",
             context=context,
         )
         _write_text_with_newline(artifact_paths["agent_log"], response)
+        agent_trace_path = run_folder / "agent_trace.json"
+        agent_trace_path.write_text(
+            json.dumps(messages, default=str, indent=2), encoding="utf-8"
+        )
 
         actions_path = artifact_paths["maintain_actions"]
         if not actions_path.exists():
