@@ -437,17 +437,6 @@ def get_indexed_run_ids() -> set[str]:
     return {str(row.get("run_id")) for row in rows if row.get("run_id")}
 
 
-def get_indexed_run_hashes() -> dict[str, str]:
-    """Return ``{run_id: content_hash}`` for all indexed sessions with a hash."""
-    _ensure_sessions_db_initialized()
-    with _connect() as conn:
-        rows = conn.execute("SELECT run_id, content_hash FROM session_docs").fetchall()
-    return {
-        str(row["run_id"]): str(row["content_hash"])
-        for row in rows
-        if row.get("run_id") and row.get("content_hash")
-    }
-
 
 def list_sessions_window(
     *,
@@ -519,12 +508,11 @@ def index_new_sessions(
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> int | list[IndexedSession]:
-    """Discover and index new or changed sessions from connected adapters.
+    """Discover and index new sessions from connected adapters.
 
-    Uses SHA-256 content hashing to detect both new sessions and sessions
-    whose trace files have grown (e.g. resumed chats).  Changed sessions
-    are re-indexed and returned with ``changed=True`` so the caller can
-    force-enqueue them for re-extraction.
+    Uses ID-based skip to avoid re-processing sessions that are already
+    indexed.  New sessions are returned with ``changed=False``; sessions
+    whose ID was already present are marked ``changed=True``.
     """
     _ensure_sessions_db_initialized()
     config = get_config()
@@ -535,7 +523,7 @@ def index_new_sessions(
     selected_agents = agents or adapter_registry.get_connected_agents(
         config.platforms_path
     )
-    known_hashes = get_indexed_run_hashes()
+    known_ids = get_indexed_run_ids()
 
     new_sessions: list[IndexedSession] = []
 
@@ -550,7 +538,7 @@ def index_new_sessions(
                 traces_dir=traces_dir,
                 start=start,
                 end=end,
-                known_run_hashes=known_hashes,
+                known_run_ids=known_ids,
             )
         except Exception as exc:
             logger.warning(
@@ -559,7 +547,7 @@ def index_new_sessions(
             continue
 
         for session in sessions:
-            is_changed = session.run_id in known_hashes
+            is_changed = session.run_id in known_ids
 
             summaries_json = json.dumps(session.summaries, ensure_ascii=True)
             summary_text = "\n".join(item for item in session.summaries if item)
@@ -583,13 +571,12 @@ def index_new_sessions(
                 summaries=summaries_json,
                 summary_text=summary_text,
                 session_path=session.session_path,
-                content_hash=session.content_hash,
+                content_hash=None,
             )
             if not indexed:
                 continue
 
-            if session.content_hash:
-                known_hashes[session.run_id] = session.content_hash
+            known_ids.add(session.run_id)
             new_sessions.append(
                 IndexedSession(
                     run_id=session.run_id,
@@ -1017,28 +1004,6 @@ if __name__ == "__main__":
             assert complete_session_job(run_id)
             counts = count_session_jobs_by_status()
             assert counts.get(JOB_STATUS_DONE, 0) >= 1
-
-            # Verify content_hash round-trip via index_session_for_fts
-            ok = index_session_for_fts(
-                run_id="hash-test",
-                agent_type="codex",
-                content="test content",
-                content_hash="abc123",
-            )
-            assert ok
-            hashes = get_indexed_run_hashes()
-            assert hashes.get("hash-test") == "abc123"
-
-            # Re-index with new hash (simulates changed session)
-            ok2 = index_session_for_fts(
-                run_id="hash-test",
-                agent_type="codex",
-                content="updated content",
-                content_hash="def456",
-            )
-            assert ok2
-            hashes2 = get_indexed_run_hashes()
-            assert hashes2.get("hash-test") == "def456"
     finally:
         if prev_cfg is None:
             os.environ.pop("LERIM_CONFIG", None)
