@@ -191,7 +191,9 @@ class LerimAgent:
         )
         self.config = config
         self.model = build_orchestration_model_from_role(role, config=config)
-        self.system_prompt = build_lead_system_prompt()
+        self.system_prompt = build_lead_system_prompt(
+            max_explorers=config.explorer_role.max_explorers
+        )
         self.single_tools = (
             list(single_tools) if single_tools is not None else list(CHAT_TOOLS)
         )
