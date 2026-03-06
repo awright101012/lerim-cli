@@ -42,6 +42,7 @@ class LLMRoleConfig:
     max_iterations: int
     openrouter_provider_order: tuple[str, ...]
     thinking: bool = True
+    max_explorers: int = 4
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class DSPyRoleConfig:
     window_overlap_tokens: int
     openrouter_provider_order: tuple[str, ...]
     thinking: bool = True
+    max_workers: int = 4
 
 
 def load_toml_file(path: Path | None) -> dict[str, Any]:
@@ -353,6 +355,7 @@ class Config:
                 "openrouter_provider_order": list(
                     self.explorer_role.openrouter_provider_order
                 ),
+                "max_explorers": self.explorer_role.max_explorers,
             },
             "extract_role": {
                 "provider": self.extract_role.provider,
@@ -418,6 +421,7 @@ def _build_llm_role(
             raw.get("openrouter_provider_order")
         ),
         thinking=bool(raw.get("thinking", True)),
+        max_explorers=int(raw.get("max_explorers", 4)),
     )
 
 
@@ -438,6 +442,7 @@ def _build_dspy_role(
             raw.get("openrouter_provider_order")
         ),
         thinking=bool(raw.get("thinking", True)),
+        max_workers=int(raw.get("max_workers", 4)),
     )
 
 
