@@ -12,13 +12,16 @@ timeout_seconds = 2000
 provider = "minimax"
 model = "MiniMax-M2.5"
 timeout_seconds = 2000
+max_explorers = 4
 
 [extraction]
 provider = "minimax"
 model = "MiniMax-M2.5"
 timeout_seconds = 2000
+max_workers = 4
 
 [summarization]
 provider = "minimax"
 model = "MiniMax-M2.5"
 timeout_seconds = 2000
+max_workers = 4

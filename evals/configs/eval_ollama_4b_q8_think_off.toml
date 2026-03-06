@@ -14,15 +14,18 @@ provider = "ollama"
 model = "qwen3.5:4b-q8_0"
 thinking = false
 timeout_seconds = 2000
+max_explorers = 1
 
 [extraction]
 provider = "ollama"
 model = "qwen3.5:4b-q8_0"
 thinking = false
 timeout_seconds = 2000
+max_workers = 1
 
 [summarization]
 provider = "ollama"
 model = "qwen3.5:4b-q8_0"
 thinking = false
 timeout_seconds = 2000
+max_workers = 1
