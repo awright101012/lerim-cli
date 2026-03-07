@@ -65,12 +65,12 @@ The sync path processes new agent sessions: reads transcript archives, extracts 
 
 ### Steps
 
-1. **Discover sessions** — Platform adapters scan configured session directories for new or changed sessions within the time window (default: last 7 days).
+1. **Discover sessions** — Platform adapters scan configured session directories for new sessions within the time window (default: last 7 days).
 2. **Index** — New sessions are written to the session catalog (`sessions.sqlite3`) with metadata (run ID, agent type, repo path, timestamps, message counts).
 3. **Enqueue** — Sessions matching a registered project are enqueued as jobs. Sessions without a project match are indexed but not extracted.
 4. **Claim** — The daemon claims pending jobs in chronological order (oldest-first) so later sessions can correctly update memories created by earlier ones.
-5. **Read transcript** — The raw session trace file (JSONL or exported JSONL) is read from disk. Lerim does not copy traces — it reads directly from the source.
-6. **Extract candidates (DSPy)** — The transcript is split into overlapping windows (configurable via `max_window_tokens` and `window_overlap_tokens`). Each window is processed by `dspy.ChainOfThought` with `MemoryExtractSignature`. Multi-window results are merged and deduplicated by a second `MemoryMergeSignature` call.
+5. **Read transcript** — For Claude and Codex, adapters compact traces on first discovery (removing noise lines like progress updates and context snapshots) and cache the result in `~/.lerim/cache/`. Subsequent reads use the compacted copy. Cursor and OpenCode traces are already compact.
+6. **Extract candidates (DSPy)** — The transcript is split into overlapping windows (configurable via `max_window_tokens` and `window_overlap_tokens`). JSONL transcripts are split on line boundaries to avoid cutting JSON objects. Windows are processed in parallel when `max_workers > 1` (default: 4). Each window is processed by `dspy.ChainOfThought` with `MemoryExtractSignature`. Multi-window results are merged and deduplicated by a second `MemoryMergeSignature` call.
 7. **Deduplicate** — The lead agent compares extracted candidates against existing memories using read-only tools. It decides `add`, `update`, or `no-op` for each candidate.
 8. **Write memories** — New memories are written via the `write_memory` tool (structured fields → markdown). Updated memories are edited in place. All writes are boundary-checked.
 9. **Write summary** — An episodic summary of the session is generated via the summarization pipeline and written to `memory/summaries/YYYYMMDD/HHMMSS/{slug}.md`.
@@ -127,6 +127,7 @@ A read-only agent delegated from the lead for candidate gathering and memory sea
 
 - **Tools**: `read`, `glob`, `grep` only
 - **Cannot write** — no write or edit tools are registered
+- The lead agent can dispatch up to `max_explorers` (default: 4) explore calls in a single turn for parallel evidence gathering. Set to 1 for local/Ollama models.
 
 ### DSPy pipelines
 

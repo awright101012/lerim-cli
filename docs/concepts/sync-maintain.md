@@ -17,12 +17,12 @@ The sync path turns raw agent session transcripts into structured memories.
 
 1. **Discover sessions**
     - Platform adapters scan configured session directories for new or changed sessions.
-    - Each adapter calls `iter_sessions()` with the current time window and a set of known content hashes.
-    - New sessions and sessions whose content has changed are returned as `SessionRecord` entries.
+    - Each adapter calls `iter_sessions()` with the current time window and a set of known session IDs.
+    - New sessions (those with an ID not yet in the catalog) are returned as `SessionRecord` entries.
 
 2. **Index sessions**
     - New sessions are inserted into the session catalog (`~/.lerim/index/sessions.sqlite3`).
-    - Metadata is recorded: run ID, agent type, session path, repo path, start time, message count, tool calls, errors, token count, and content hash.
+    - Metadata is recorded: run ID, agent type, session path, repo path, start time, message count, tool calls, errors, and token count.
 
 3. **Match to project**
     - Each session's `repo_path` is compared against registered projects in `config.projects`.
@@ -128,7 +128,9 @@ Large transcripts are split into overlapping windows to fit within model context
 | `max_window_tokens` | `300,000` | Maximum tokens per window |
 | `window_overlap_tokens` | `5,000` | Token overlap between adjacent windows |
 
-Overlap ensures that context at window boundaries is not lost. For most sessions, a single window suffices. Very long sessions (multi-hour pair programming) may produce 2-3 windows.
+Overlap ensures that context at window boundaries is not lost. For JSONL transcripts (the standard format), windows are split on line boundaries to avoid cutting JSON objects mid-line. For most sessions, a single window suffices. Very long sessions (multi-hour pair programming) may produce 2-3 windows.
+
+When `max_workers > 1` (default: 4), windows are processed in parallel using a thread pool. Set `max_workers = 1` for local/Ollama models to avoid RAM contention.
 
 ### Extraction signature
 
