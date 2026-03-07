@@ -17,32 +17,33 @@ values.
 dir = "~/.lerim"
 
 [memory]
-scope = "project_fallback_global"
+scope = "project_fallback_global"   # project_fallback_global | project_only | global_only
 project_dir_name = ".lerim"
 
 [memory.decay]
 enabled = true
-decay_days = 180
-min_confidence_floor = 0.1
-archive_threshold = 0.2
-recent_access_grace_days = 30
+decay_days = 180                    # days of no access before full decay
+min_confidence_floor = 0.1          # decay never drops below this multiplier
+archive_threshold = 0.2             # effective confidence below this → archive candidate
+recent_access_grace_days = 30       # recently accessed memories skip archiving
 
 [server]
 host = "127.0.0.1"
 port = 8765
-sync_interval_minutes = 10
-maintain_interval_minutes = 60
+sync_interval_minutes = 10          # sync hot path interval
+maintain_interval_minutes = 60      # maintain cold path interval
 sync_window_days = 7
 sync_max_sessions = 50
 
 [roles.lead]
-provider = "minimax"
+provider = "minimax"                   # minimax | zai | openrouter | openai
 model = "MiniMax-M2.5"
 api_base = ""
 fallback_models = ["zai:glm-4.7"]
 timeout_seconds = 300
 max_iterations = 10
 openrouter_provider_order = []
+thinking = true                        # enable model thinking/reasoning (Ollama Qwen 3.5)
 
 [roles.explorer]
 provider = "minimax"
@@ -52,6 +53,8 @@ fallback_models = ["zai:glm-4.7"]
 timeout_seconds = 180
 max_iterations = 8
 openrouter_provider_order = []
+thinking = true
+max_explorers = 4                     # max parallel explorer subagents per lead turn (set 1 for local/Ollama models)
 
 [roles.extract]
 provider = "minimax"
@@ -62,6 +65,8 @@ timeout_seconds = 180
 max_window_tokens = 300000
 window_overlap_tokens = 5000
 openrouter_provider_order = []
+thinking = true
+max_workers = 4                        # parallel window processing (set 1 for local/Ollama models)
 
 [roles.summarize]
 provider = "minimax"
@@ -72,26 +77,37 @@ timeout_seconds = 180
 max_window_tokens = 300000
 window_overlap_tokens = 5000
 openrouter_provider_order = []
+thinking = true
+max_workers = 4                        # parallel window processing (set 1 for local/Ollama models)
 
 [providers]
+# Default API base URLs per provider.
+# Override here to point all roles using that provider at a different endpoint.
+# Per-role api_base (under [roles.*]) takes precedence over these defaults.
 minimax = "https://api.minimax.io/v1"
 zai = "https://api.z.ai/api/coding/paas/v4"
 openai = "https://api.openai.com/v1"
 openrouter = "https://openrouter.ai/api/v1"
 ollama = "http://127.0.0.1:11434"
+# Docker: use "http://host.docker.internal:11434" if Ollama runs on the host.
+litellm_proxy = "http://127.0.0.1:4000"
 mlx = "http://127.0.0.1:8000/v1"
-auto_unload = true
+auto_unload = true                     # unload Ollama models after each sync/maintain cycle to free RAM
 
 [tracing]
-enabled = false
-include_httpx = false
-include_content = true
+enabled = false                          # set true or LERIM_TRACING=1 to enable
+include_httpx = false                    # capture raw HTTP request/response bodies
+include_content = true                   # include prompt/completion text in spans
 
 [agents]
+# Map agent names to session directory paths.
 # claude = "~/.claude/projects"
 # codex = "~/.codex/sessions"
+# cursor = "~/Library/Application Support/Cursor/User/globalStorage"
+# opencode = "~/.local/share/opencode"
 
 [projects]
+# Map project short names to absolute host paths.
 # my-project = "~/codes/my-project"
 ```
 
@@ -173,15 +189,18 @@ for a full breakdown.
 | `timeout_seconds` | int | `300`/`180` | Request timeout. |
 | `max_iterations` | int | `10`/`8` | Max agent tool-call iterations. |
 | `openrouter_provider_order` | list | `[]` | OpenRouter-specific provider ordering preference. |
+| `thinking` | bool | `true` | Enable model thinking/reasoning. Set `false` for non-reasoning models. |
+| `max_explorers` | int | `4` | Explorer only. Max parallel explorer subagents the lead dispatches per tool-call turn. Set `1` for local/Ollama models. |
 
 **DSPy roles** (`extract`, `summarize`) -- used by DSPy ChainOfThought pipelines:
 
-All keys from orchestration roles, plus:
+All keys from orchestration roles (including `thinking`), plus:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `max_window_tokens` | int | `300000` | Maximum tokens per transcript window for DSPy processing. |
 | `window_overlap_tokens` | int | `5000` | Overlap between consecutive windows when splitting large transcripts. |
+| `max_workers` | int | `4` | Parallel window processing threads. Set `1` for local/Ollama models to avoid RAM contention. |
 
 ### `[providers]`
 

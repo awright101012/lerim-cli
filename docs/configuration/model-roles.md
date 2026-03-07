@@ -38,6 +38,7 @@ Each role is configured under `[roles.<name>]` in your TOML config.
     timeout_seconds = 300
     max_iterations = 10
     openrouter_provider_order = []
+    thinking = true
     ```
 
     The lead agent is the only component allowed to write memory files. It
@@ -54,6 +55,8 @@ Each role is configured under `[roles.<name>]` in your TOML config.
     timeout_seconds = 180
     max_iterations = 8
     openrouter_provider_order = []
+    thinking = true
+    max_explorers = 4
     ```
 
     The explorer is a read-only subagent with access to `read`, `glob`, and
@@ -71,6 +74,8 @@ Each role is configured under `[roles.<name>]` in your TOML config.
     max_window_tokens = 300000
     window_overlap_tokens = 5000
     openrouter_provider_order = []
+    thinking = true
+    max_workers = 4
     ```
 
     Extraction runs through `dspy.ChainOfThought` with transcript windowing.
@@ -89,6 +94,8 @@ Each role is configured under `[roles.<name>]` in your TOML config.
     max_window_tokens = 300000
     window_overlap_tokens = 5000
     openrouter_provider_order = []
+    thinking = true
+    max_workers = 4
     ```
 
     Summarization uses the same windowed ChainOfThought approach as extraction,
@@ -199,6 +206,9 @@ mlx = "http://127.0.0.1:8000/v1"
 | `max_window_tokens` | `extract`, `summarize` | Max tokens per transcript window for DSPy processing. |
 | `window_overlap_tokens` | `extract`, `summarize` | Token overlap between consecutive windows. |
 | `openrouter_provider_order` | All roles | OpenRouter-specific: preferred provider ordering (e.g. `["Fireworks", "Together"]`). |
+| `thinking` | All roles | Enable model thinking/reasoning (default: `true`, set `false` for non-reasoning models). |
+| `max_explorers` | `explorer` | Max parallel explorer subagents the lead dispatches per turn (default: `4`, set `1` for local models). |
+| `max_workers` | `extract`, `summarize` | Parallel window processing threads (default: `4`, set `1` for local/Ollama models to avoid RAM contention). |
 
 ## Fallback models
 
