@@ -80,6 +80,10 @@ for config in "${configs[@]}"; do
     for pipeline in $PIPELINES; do
         echo ""
         echo "--- $pipeline ---"
+        # Count available traces and apply limit
+        available=$(find "$traces_dir" -maxdepth 1 \( -name "*.jsonl" -o -name "*.json" \) ! -name ".gitkeep" 2>/dev/null | wc -l | tr -d ' ')
+        effective=$((LIMIT > 0 && LIMIT < available ? LIMIT : available))
+        echo "  Processing $effective traces (of $available available)"
         runner="evals/run_${pipeline}.py"
         if [[ ! -f "$runner" ]]; then
             echo "  SKIP: runner not found: $runner"
