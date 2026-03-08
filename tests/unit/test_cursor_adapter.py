@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 
 from lerim.adapters.cursor import (
+    compact_trace,
     count_sessions,
     iter_sessions,
     read_session,
@@ -112,8 +113,8 @@ def test_count_sessions_counts_composers_with_messages():
         assert count_sessions(Path(tmp)) == 2
 
 
-def test_exported_jsonl_contains_raw_data():
-    """Exported JSONL preserves the raw DB data without normalization."""
+def test_exported_jsonl_contains_compacted_data():
+    """Exported JSONL preserves non-empty fields after compaction."""
     with TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "state.vscdb"
         cache_dir = Path(tmp) / "cache"
@@ -252,3 +253,75 @@ def test_iter_sessions_skips_known_ids():
         )
         assert len(records) == 1
         assert records[0].run_id == "new"
+
+
+# --- compact_trace tests ---
+
+
+def test_compact_trace_clears_tool_results():
+    """compact_trace replaces toolFormerData result with size descriptor."""
+    bubble = {
+        "type": 2,
+        "text": "I ran the command",
+        "toolFormerData": [
+            {
+                "name": "run_terminal_command_v2",
+                "params": {"cmd": "ls"},
+                "result": "x" * 5000,
+                "status": "done",
+            },
+        ],
+    }
+    result = compact_trace(json.dumps(bubble) + "\n")
+    parsed = json.loads(result.strip())
+    tool = parsed["toolFormerData"][0]
+    assert tool["name"] == "run_terminal_command_v2"
+    assert tool["params"] == {"cmd": "ls"}
+    assert tool["result"] == "[cleared: 5000 chars]"
+    assert tool["status"] == "done"
+
+
+def test_compact_trace_clears_thinking_blocks():
+    """compact_trace replaces thinking text with size descriptor on capabilityType 30."""
+    bubble = {
+        "type": 2,
+        "capabilityType": 30,
+        "thinking": {"text": "y" * 10000, "signature": "sig123"},
+        "text": "",
+    }
+    result = compact_trace(json.dumps(bubble) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed["thinking"]["text"] == "[thinking cleared: 10000 chars]"
+    assert "signature" not in parsed["thinking"]
+
+
+def test_compact_trace_strips_empty_fields():
+    """compact_trace removes fields with empty/falsy values."""
+    bubble = {
+        "type": 1,
+        "text": "hello",
+        "lints": [],
+        "commits": [],
+        "attachments": [],
+        "extra": None,
+    }
+    result = compact_trace(json.dumps(bubble) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed["type"] == 1
+    assert parsed["text"] == "hello"
+    assert "lints" not in parsed
+    assert "commits" not in parsed
+    assert "attachments" not in parsed
+    assert "extra" not in parsed
+
+
+def test_compact_trace_preserves_user_assistant_text():
+    """compact_trace preserves text content of user and assistant bubbles."""
+    lines = [
+        json.dumps({"type": 1, "text": "user message"}),
+        json.dumps({"type": 2, "text": "assistant reply"}),
+    ]
+    result = compact_trace("\n".join(lines) + "\n")
+    parsed = [json.loads(l) for l in result.strip().split("\n")]
+    assert parsed[0]["text"] == "user message"
+    assert parsed[1]["text"] == "assistant reply"

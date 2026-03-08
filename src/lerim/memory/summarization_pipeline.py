@@ -1,8 +1,12 @@
-"""Trace summarization pipeline using ChainOfThought + windowing.
+"""Trace summarization pipeline using ChainOfThought.
 
 Outputs markdown-frontmatter-ready metadata + summary.
 When --memory-root is provided, writes the summary markdown file
 directly to memory_root/summaries/YYYYMMDD/HHMMSS/{slug}.md using python-frontmatter.
+
+Traces are compacted by adapters (tool outputs stripped), so most traces fit in a
+single LLM call. For rare oversized traces, a sequential refine/fold pattern
+processes chunks in order and accumulates into a single summary.
 """
 
 from __future__ import annotations
@@ -20,13 +24,17 @@ from typing import Any
 
 import dspy
 import frontmatter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydantic import BaseModel, Field
 
 from lerim.config.logging import logger
 from lerim.memory.memory_record import slugify
 from lerim.config.settings import get_config, reload_config
-from lerim.memory.utils import configure_dspy_lm, window_transcript, window_transcript_jsonl
+from lerim.memory.utils import (
+    configure_dspy_lm,
+    estimate_tokens,
+    window_transcript,
+    window_transcript_jsonl,
+)
 from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
 
@@ -70,33 +78,6 @@ At most 200 words.""",
     )
 
 
-def _summarization_reward(_args, pred) -> float:
-    """Return 1.0 if summary_payload validates as TraceSummaryCandidate."""
-    payload = getattr(pred, "summary_payload", None)
-    if payload is None:
-        return 0.0
-    if isinstance(payload, TraceSummaryCandidate):
-        return 1.0
-    if isinstance(payload, dict):
-        try:
-            TraceSummaryCandidate.model_validate(payload)
-            return 1.0
-        except Exception:
-            return 0.0
-    return 0.0
-
-
-class PartialSummary(BaseModel):
-    """Lightweight model for per-window partial summaries."""
-
-    user_goals: str = Field(description="User goals and intentions from this window.")
-    key_actions: str = Field(description="Key actions taken in this window.")
-    failures_and_frictions: str = Field(
-        description="Failures, frictions, and blockers encountered."
-    )
-    fixes_and_outcomes: str = Field(description="Fixes applied and outcomes achieved.")
-
-
 class TraceSummarySignature(dspy.Signature):
     """Summarize a raw coding-agent session trace into structured metadata plus a two-part summary.
 
@@ -123,53 +104,21 @@ class TraceSummarySignature(dspy.Signature):
     )
 
 
-class WindowSummarySignature(dspy.Signature):
-    """Summarize this transcript segment.
+class RefineSummarySignature(dspy.Signature):
+    """Refine a session summary with the next chunk of the trace.
 
-    Extract user goals, key actions taken, failures/frictions encountered,
-    and fixes/outcomes achieved.
+    You have a running summary from earlier chunks and a new chunk of the trace.
+    Update the summary to incorporate new information from this chunk while
+    preserving important details from the running summary.
     """
 
-    transcript: str = dspy.InputField(desc="One transcript window segment")
-    metadata: dict = dspy.InputField(desc="Session metadata")
-    window_index: int = dspy.InputField(desc="Zero-based window index")
-    total_windows: int = dspy.InputField(desc="Total number of windows")
-    partial: PartialSummary = dspy.OutputField(desc="Partial summary for this window")
-
-
-class TraceSummaryMergeSignature(dspy.Signature):
-    """Merge partial summaries from multiple transcript windows into one coherent trace summary.
-
-    Produce a unified user_intent (<=150 words) and session_narrative (<=200 words).
-    Ground all claims in the partial evidence.
-    """
-
-    partial_summaries: list[dict] = dspy.InputField(desc="List of PartialSummary dicts")
-    metadata: dict = dspy.InputField(desc="Session metadata")
-    metrics: dict = dspy.InputField(desc="Deterministic metrics")
-    guidance: str = dspy.InputField(desc="Optional guidance")
+    running_summary: str = dspy.InputField(desc="Summary from previous chunks (JSON)")
+    trace_chunk: str = dspy.InputField(desc="Next chunk of the session trace")
+    chunk_position: str = dspy.InputField(desc="e.g. 'chunk 2 of 4'")
+    metadata: dict[str, Any] = dspy.InputField(desc="Session metadata")
     summary_payload: TraceSummaryCandidate = dspy.OutputField(
-        desc="Final merged summary"
+        desc="Updated summary incorporating the new chunk"
     )
-
-
-def _process_summary_window(window_summarizer, window, meta, i, total_windows, lm):
-    """Process one summarization window in its own thread."""
-    with dspy.context(lm=lm):
-        wi = i + 1
-        logger.info("  Window {}/{}: summarizing...", wi, total_windows)
-        w_start = time.time()
-        partial_result = window_summarizer(
-            transcript=window, metadata=meta, window_index=i, total_windows=total_windows,
-        )
-        partial = getattr(partial_result, "partial", None)
-        result = None
-        if isinstance(partial, PartialSummary):
-            result = partial.model_dump(mode="json")
-        elif isinstance(partial, dict):
-            result = partial
-        logger.info("  Window {}/{}: done ({:.1f}s)", wi, total_windows, time.time() - w_start)
-        return result
 
 
 def _summarize_trace(
@@ -179,79 +128,83 @@ def _summarize_trace(
     metrics: dict[str, Any] | None = None,
     guidance: str = "",
 ) -> dict[str, Any]:
-    """Run ChainOfThought summarization with windowing and return validated summary."""
+    """Run ChainOfThought summarization and return validated summary.
+
+    Single call when trace fits in context. Sequential refine/fold for oversized traces.
+    """
     if not transcript.strip():
         raise RuntimeError("session_trace_empty")
     config = get_config()
     max_window_tokens = config.summarize_role.max_window_tokens
     overlap_tokens = config.summarize_role.window_overlap_tokens
-    if "\n{" in transcript:
-        windows = window_transcript_jsonl(transcript, max_window_tokens, overlap_tokens)
-    else:
-        windows = window_transcript(transcript, max_window_tokens, overlap_tokens)
-    logger.info("Summarization: {} window(s), max_window_tokens={}", len(windows), max_window_tokens)
     lm = configure_dspy_lm("summarize")
     meta = metadata or {}
     met = metrics or {}
     guid = guidance.strip()
 
     history_start = len(lm.history)
+    trace_tokens = estimate_tokens(transcript)
+
     with dspy.context(lm=lm):
-        if len(windows) == 1:
-            # Single window: direct summarization
-            logger.info("  Window 1/1: summarizing...")
+        if trace_tokens <= int(max_window_tokens * 0.85):
+            # Fast path: single call — trace fits in context
+            logger.info("Summarization: single call ({} est. tokens)", trace_tokens)
             w_start = time.time()
-            summarizer = dspy.Refine(
-                dspy.ChainOfThought(TraceSummarySignature),
-                N=2,
-                reward_fn=_summarization_reward,
-                threshold=1.0,
+            summarizer = dspy.ChainOfThought(TraceSummarySignature)
+            result = summarizer(
+                transcript=transcript, metadata=meta, metrics=met, guidance=guid
             )
+            logger.info("Summarization: done ({:.1f}s)", time.time() - w_start)
+        else:
+            # Slow path: refine/fold — process chunks sequentially
+            if "\n{" in transcript:
+                windows = window_transcript_jsonl(
+                    transcript, max_window_tokens, overlap_tokens
+                )
+            else:
+                windows = window_transcript(
+                    transcript, max_window_tokens, overlap_tokens
+                )
+            logger.info(
+                "Summarization: {} windows (refine/fold), {} est. tokens",
+                len(windows),
+                trace_tokens,
+            )
+
+            # First chunk: full summarization
+            w_start = time.time()
+            summarizer = dspy.ChainOfThought(TraceSummarySignature)
             result = summarizer(
                 transcript=windows[0], metadata=meta, metrics=met, guidance=guid
             )
-            logger.info("  Window 1/1: done ({:.1f}s)", time.time() - w_start)
-        else:
-            # Multiple windows: partial summaries then merge
-            partials: list[dict] = []
-            window_summarizer = dspy.ChainOfThought(WindowSummarySignature)
-            max_workers = min(config.summarize_role.max_workers, len(windows))
-            if max_workers <= 1:
-                with dspy.context(lm=lm):
-                    for i, window in enumerate(windows):
-                        result = _process_summary_window(
-                            window_summarizer, window, meta, i, len(windows), lm
-                        )
-                        if result is not None:
-                            partials.append(result)
-            else:
-                logger.info("Processing {} windows with {} workers", len(windows), max_workers)
-                with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                    futures = {
-                        pool.submit(
-                            _process_summary_window,
-                            window_summarizer, window, meta, i, len(windows), lm,
-                        ): i
-                        for i, window in enumerate(windows)
-                    }
-                    for future in as_completed(futures):
-                        result = future.result()
-                        if result is not None:
-                            partials.append(result)
-            logger.info("Merging {} partial summaries...", len(partials))
-            merge_summarizer = dspy.Refine(
-                dspy.ChainOfThought(TraceSummaryMergeSignature),
-                N=2,
-                reward_fn=_summarization_reward,
-                threshold=1.0,
+            logger.info(
+                "  Chunk 1/{}: done ({:.1f}s)", len(windows), time.time() - w_start
             )
-            result = merge_summarizer(
-                partial_summaries=partials,
-                metadata=meta,
-                metrics=met,
-                guidance=guid,
-            )
-            logger.info("Merge done")
+
+            # Subsequent chunks: refine with running summary
+            refiner = dspy.ChainOfThought(RefineSummarySignature)
+            for i, window in enumerate(windows[1:], 2):
+                running = getattr(result, "summary_payload", None)
+                if isinstance(running, TraceSummaryCandidate):
+                    running_json = running.model_dump_json()
+                elif isinstance(running, dict):
+                    running_json = json.dumps(running)
+                else:
+                    running_json = str(running)
+                w_start = time.time()
+                result = refiner(
+                    running_summary=running_json,
+                    trace_chunk=window,
+                    chunk_position=f"chunk {i} of {len(windows)}",
+                    metadata=meta,
+                )
+                logger.info(
+                    "  Chunk {}/{}: done ({:.1f}s)",
+                    i,
+                    len(windows),
+                    time.time() - w_start,
+                )
+
     capture_dspy_cost(lm, history_start)
 
     payload = getattr(result, "summary_payload", None)

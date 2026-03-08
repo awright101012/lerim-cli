@@ -39,10 +39,10 @@ The sync path turns raw agent session transcripts into structured memories.
     - Lerim does not copy traces — it reads from the source path stored in the session record.
 
 6. **Extract candidates (DSPy)**
-    - The transcript is split into overlapping windows based on `max_window_tokens` (default: 300,000) and `window_overlap_tokens` (default: 5,000).
+    - The compacted transcript is split into overlapping windows if needed based on `max_window_tokens` and `window_overlap_tokens`. Most compacted traces fit in a single window.
     - Each window is processed by `dspy.ChainOfThought` with `MemoryExtractSignature`.
     - The signature instructs the model to find decisions and learnings, classify learning kinds, assign confidence scores, and extract short evidence quotes.
-    - If multiple windows were processed, a second `MemoryMergeSignature` call deduplicates and merges the per-window results.
+    - Candidates from all windows are concatenated. No merge step — deduplication is handled downstream by the maintain path.
 
 7. **Lead agent deduplication**
     - The lead agent (PydanticAI) receives the extracted candidates.
@@ -103,40 +103,39 @@ The DSPy extraction pipeline is the core intelligence of the sync path.
 
 ```mermaid
 flowchart TD
-    A["Raw transcript\n(JSONL)"] --> B["Window transcript\n(split by max_window_tokens)"]
-    B --> C["Window 1"]
-    B --> D["Window 2"]
-    B --> E["Window N"]
-    C --> F["ChainOfThought\n(MemoryExtractSignature)"]
-    D --> G["ChainOfThought\n(MemoryExtractSignature)"]
-    E --> H["ChainOfThought\n(MemoryExtractSignature)"]
-    F --> I["Per-window candidates"]
-    G --> I
-    H --> I
-    I --> J{"Multiple\nwindows?"}
-    J -->|Yes| K["ChainOfThought\n(MemoryMergeSignature)"]
-    J -->|No| L["Final candidates"]
+    A["Compacted transcript\n(tool outputs stripped)"] --> B{"Fits in\ncontext?"}
+    B -->|Yes| C["ChainOfThought\n(MemoryExtractSignature)"]
+    B -->|No| D["Window transcript\n(split by max_window_tokens)"]
+    D --> E["Window 1"] --> F["ChainOfThought"]
+    D --> G["Window 2"] --> H["ChainOfThought"]
+    D --> I["Window N"] --> J["ChainOfThought"]
+    F --> K["Concat all candidates"]
+    H --> K
+    J --> K
+    C --> L["Final candidates"]
     K --> L
 ```
 
-### Windowing
+### Compaction
 
-Large transcripts are split into overlapping windows to fit within model context limits:
+Adapters compact traces before extraction by stripping tool output content (file reads, command outputs, search results) and replacing it with size descriptors like `[cleared: 5000 chars]`. Thinking/reasoning blocks are also stripped. This typically reduces trace size by 40-90%, making most traces fit in a single LLM call.
+
+### Windowing (fallback)
+
+For rare traces that exceed context after compaction, the transcript is split into overlapping windows:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `max_window_tokens` | `300,000` | Maximum tokens per window |
 | `window_overlap_tokens` | `5,000` | Token overlap between adjacent windows |
 
-Overlap ensures that context at window boundaries is not lost. For JSONL transcripts (the standard format), windows are split on line boundaries to avoid cutting JSON objects mid-line. For most sessions, a single window suffices. Very long sessions (multi-hour pair programming) may produce 2-3 windows.
-
-When `max_workers > 1` (default: 4), windows are processed in parallel using a thread pool. Set `max_workers = 1` for local/Ollama models to avoid RAM contention.
+Candidates from all windows are concatenated without merging. Deduplication is handled downstream by the maintain path.
 
 ### Extraction signature
 
 The `MemoryExtractSignature` receives:
 
-- **transcript** — raw session text (one window)
+- **transcript** — compacted session text (one window)
 - **metadata** — session metadata (run ID, agent type, repo)
 - **metrics** — deterministic metrics (message count, tool calls, errors)
 - **guidance** — optional natural language hints from the lead agent
@@ -150,10 +149,6 @@ It outputs a list of `MemoryCandidate` objects, each with:
 - `confidence` — extraction confidence (0.0 to 1.0)
 - `tags` — descriptive labels
 - `evidence` — short quote from the transcript (max 200 chars)
-
-### Merge signature
-
-When multiple windows are processed, `MemoryMergeSignature` deduplicates the combined candidates — removing near-duplicates (keeping the highest-confidence version) and dropping weak or redundant items.
 
 ---
 

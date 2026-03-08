@@ -17,10 +17,12 @@ from lerim.adapters.common import (
 
 
 def compact_trace(raw_text: str) -> str:
-    """Remove non-conversational noise from Codex trace JSONL.
+    """Remove non-conversational noise and strip tool outputs from Codex trace JSONL.
 
     Drops: turn_context lines (full codebase snapshots).
-    Keeps: session_meta (with base_instructions stripped), event_msg, response_item.
+    Strips: base_instructions from session_meta.
+    Clears: function_call_output content (replaced with size descriptor).
+    Clears: reasoning / agent_reasoning content (replaced with size descriptor).
     """
     kept: list[str] = []
     for line in raw_text.split("\n"):
@@ -34,13 +36,31 @@ def compact_trace(raw_text: str) -> str:
             continue
         if obj.get("type") == "turn_context":
             continue
-        if obj.get("type") == "session_meta":
-            payload = obj.get("payload")
-            if isinstance(payload, dict) and "base_instructions" in payload:
-                payload.pop("base_instructions", None)
-                kept.append(json.dumps(obj, ensure_ascii=False))
-                continue
-        kept.append(line)
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            kept.append(line)
+            continue
+        line_type = obj.get("type")
+        if line_type == "session_meta":
+            payload.pop("base_instructions", None)
+        elif line_type == "response_item":
+            ptype = payload.get("type")
+            if ptype == "function_call_output":
+                output = payload.get("output", "")
+                payload["output"] = f"[cleared: {len(output)} chars]"
+            elif ptype == "reasoning":
+                content = payload.get("content", [])
+                total = (
+                    sum(len(c.get("text", "")) for c in content if isinstance(c, dict))
+                    if isinstance(content, list)
+                    else len(str(content))
+                )
+                payload["content"] = f"[reasoning cleared: {total} chars]"
+        elif line_type == "event_msg":
+            if payload.get("type") == "agent_reasoning":
+                msg = payload.get("message", "")
+                payload["message"] = f"[reasoning cleared: {len(msg)} chars]"
+        kept.append(json.dumps(obj, ensure_ascii=False))
     return "\n".join(kept) + "\n"
 
 

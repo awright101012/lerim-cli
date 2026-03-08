@@ -255,7 +255,13 @@ def test_compact_trace_drops_noise_types():
         json.dumps({"type": "file-history-snapshot", "files": []}),
         json.dumps({"type": "queue-operation", "op": "enqueue"}),
         json.dumps({"type": "pr-link", "url": "https://example.com"}),
-        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}, "timestamp": "t2"}),
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "hello"}]},
+                "timestamp": "t2",
+            }
+        ),
     ]
     result = compact_trace("\n".join(lines) + "\n")
     parsed = [json.loads(l) for l in result.strip().split("\n")]
@@ -290,8 +296,8 @@ def test_compact_trace_strips_metadata_fields():
     assert parsed["message"]["content"] == "hello"
 
 
-def test_compact_trace_truncates_tool_result_string():
-    """compact_trace truncates oversized tool_result content (string form)."""
+def test_compact_trace_clears_tool_result_string():
+    """compact_trace replaces tool_result string content with size descriptor."""
     big_content = "x" * 100_000
     entry = {
         "type": "user",
@@ -309,12 +315,11 @@ def test_compact_trace_truncates_tool_result_string():
     result = compact_trace(json.dumps(entry) + "\n")
     parsed = json.loads(result.strip())
     inner = parsed["message"]["content"][0]["content"]
-    assert len(inner) <= 50_001 + len("\n[truncated]")
-    assert inner.endswith("\n[truncated]")
+    assert inner == "[cleared: 100000 chars]"
 
 
-def test_compact_trace_truncates_tool_result_list():
-    """compact_trace truncates oversized tool_result content (list-of-dicts form)."""
+def test_compact_trace_clears_tool_result_list():
+    """compact_trace replaces tool_result list content with size descriptor."""
     entry = {
         "type": "user",
         "message": {
@@ -333,14 +338,12 @@ def test_compact_trace_truncates_tool_result_list():
     }
     result = compact_trace(json.dumps(entry) + "\n")
     parsed = json.loads(result.strip())
-    blocks = parsed["message"]["content"][0]["content"]
-    total_text = sum(len(b["text"]) for b in blocks)
-    # Total should be capped around 50K
-    assert total_text <= 50_001 + len("\n[truncated]")
+    inner = parsed["message"]["content"][0]["content"]
+    assert inner == "[cleared: 80000 chars]"
 
 
-def test_compact_trace_preserves_small_tool_results():
-    """compact_trace does not truncate tool_result content under the limit."""
+def test_compact_trace_clears_small_tool_results():
+    """compact_trace clears ALL tool_result content regardless of size."""
     small_content = "result data"
     entry = {
         "type": "user",
@@ -357,12 +360,40 @@ def test_compact_trace_preserves_small_tool_results():
     }
     result = compact_trace(json.dumps(entry) + "\n")
     parsed = json.loads(result.strip())
-    assert parsed["message"]["content"][0]["content"] == small_content
+    assert (
+        parsed["message"]["content"][0]["content"]
+        == f"[cleared: {len(small_content)} chars]"
+    )
+
+
+def test_compact_trace_clears_thinking_blocks():
+    """compact_trace replaces thinking block text with size descriptor and drops signature."""
+    entry = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "thinking", "thinking": "x" * 5000, "signature": "abc123"},
+                {"type": "text", "text": "My conclusion"},
+            ]
+        },
+        "timestamp": "t1",
+    }
+    result = compact_trace(json.dumps(entry) + "\n")
+    parsed = json.loads(result.strip())
+    thinking_block = parsed["message"]["content"][0]
+    assert thinking_block["thinking"] == "[thinking cleared: 5000 chars]"
+    assert "signature" not in thinking_block
+    text_block = parsed["message"]["content"][1]
+    assert text_block["text"] == "My conclusion"
 
 
 def test_compact_trace_keeps_malformed_lines():
     """compact_trace preserves non-JSON lines as-is."""
-    raw = "not-json\n" + json.dumps({"type": "user", "message": {"content": "hi"}, "timestamp": "t"}) + "\n"
+    raw = (
+        "not-json\n"
+        + json.dumps({"type": "user", "message": {"content": "hi"}, "timestamp": "t"})
+        + "\n"
+    )
     result = compact_trace(raw)
     lines = [l for l in result.strip().split("\n") if l.strip()]
     assert lines[0] == "not-json"

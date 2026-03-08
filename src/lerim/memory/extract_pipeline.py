@@ -1,6 +1,11 @@
 """Extraction pipeline for session transcripts using ChainOfThought + windowing.
 
-session file (.jsonl/.json) -> read text -> window -> dspy.ChainOfThought -> merge -> memory candidates.
+session file (.jsonl/.json) -> read text -> window (if needed) -> dspy.ChainOfThought
+-> concat candidates from all windows.
+
+Traces are compacted by adapters (tool outputs stripped), so most traces fit in a
+single window. Windowing is a fallback for unusually large sessions. No merge or
+deduplication — the downstream maintain path handles that.
 """
 
 from __future__ import annotations
@@ -16,28 +21,17 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import dspy
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from lerim.config.logging import logger
 from lerim.config.settings import get_config
 from lerim.memory.schemas import MemoryCandidate
-from lerim.memory.utils import configure_dspy_lm, window_transcript, window_transcript_jsonl
+from lerim.memory.utils import (
+    configure_dspy_lm,
+    window_transcript,
+    window_transcript_jsonl,
+)
 from lerim.runtime.cost_tracker import capture_dspy_cost
 from lerim.sessions import catalog as session_db
-
-
-def _extraction_reward(_args, pred) -> float:
-    """Return 1.0 if primitives is a non-empty list of valid MemoryCandidate items."""
-    primitives = getattr(pred, "primitives", None)
-    if not isinstance(primitives, list) or not primitives:
-        return 0.0
-    for item in primitives:
-        if isinstance(item, dict):
-            try:
-                MemoryCandidate.model_validate(item)
-            except Exception:
-                return 0.0
-    return 1.0
 
 
 class MemoryExtractSignature(dspy.Signature):
@@ -70,38 +64,6 @@ class MemoryExtractSignature(dspy.Signature):
     )
 
 
-class MemoryMergeSignature(dspy.Signature):
-    """Merge and deduplicate memory candidates extracted from multiple transcript windows.
-
-    Remove near-duplicates (keep highest-confidence version).
-    Drop weak or redundant items. Return the final clean list.
-    """
-
-    candidates: list[dict] = dspy.InputField(
-        desc="All per-window candidates as list of dicts"
-    )
-    metadata: dict = dspy.InputField(desc="Session metadata")
-    primitives: list[MemoryCandidate] = dspy.OutputField(desc="Deduplicated final list")
-
-
-def _process_window(extractor, window, meta, met, guid, wi, total, lm):
-    """Process one extraction window in its own thread."""
-    with dspy.context(lm=lm):
-        w_start = time.time()
-        result = extractor(transcript=window, metadata=meta, metrics=met, guidance=guid)
-        candidates = []
-        primitives = getattr(result, "primitives", [])
-        if isinstance(primitives, list):
-            for item in primitives:
-                if isinstance(item, MemoryCandidate):
-                    candidates.append(item.model_dump(mode="json", exclude_none=True))
-                elif isinstance(item, dict):
-                    candidates.append(item)
-        elapsed = time.time() - w_start
-        logger.info("  Window {}/{}: done ({:.1f}s, {} candidates)", wi, total, elapsed, len(candidates))
-        return candidates
-
-
 def _extract_candidates(
     transcript: str,
     *,
@@ -109,7 +71,11 @@ def _extract_candidates(
     metrics: dict[str, Any] | None = None,
     guidance: str = "",
 ) -> list[dict[str, Any]]:
-    """Run ChainOfThought extraction with windowing and return normalized candidates."""
+    """Run ChainOfThought extraction with windowing and return normalized candidates.
+
+    Processes each window independently and concatenates all candidates.
+    No merge or deduplication — maintain handles that downstream.
+    """
     if not transcript.strip():
         return []
     config = get_config()
@@ -119,69 +85,44 @@ def _extract_candidates(
         windows = window_transcript_jsonl(transcript, max_window_tokens, overlap_tokens)
     else:
         windows = window_transcript(transcript, max_window_tokens, overlap_tokens)
-    logger.info("Extraction: {} window(s), max_window_tokens={}", len(windows), max_window_tokens)
+    logger.info(
+        "Extraction: {} window(s), max_window_tokens={}",
+        len(windows),
+        max_window_tokens,
+    )
     lm = configure_dspy_lm("extract")
     meta = metadata or {}
     met = metrics or {}
     guid = guidance.strip()
 
     all_candidates: list[dict[str, Any]] = []
-    extractor = dspy.Refine(
-        dspy.ChainOfThought(MemoryExtractSignature),
-        N=2,
-        reward_fn=_extraction_reward,
-        threshold=1.0,
-    )
+    extractor = dspy.ChainOfThought(MemoryExtractSignature)
     history_start = len(lm.history)
-    max_workers = min(config.extract_role.max_workers, len(windows))
-    if max_workers <= 1:
-        with dspy.context(lm=lm):
-            for wi, window in enumerate(windows, 1):
-                logger.info("  Window {}/{}: extracting...", wi, len(windows))
-                all_candidates.extend(
-                    _process_window(extractor, window, meta, met, guid, wi, len(windows), lm)
-                )
-    else:
-        logger.info("Processing {} windows with {} workers", len(windows), max_workers)
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_process_window, extractor, window, meta, met, guid, wi, len(windows), lm): wi
-                for wi, window in enumerate(windows, 1)
-            }
-            for future in as_completed(futures):
-                all_candidates.extend(future.result())
-
-    if not all_candidates:
-        capture_dspy_cost(lm, history_start)
-        return []
-
-    # Single window: no merge needed
-    if len(windows) == 1:
-        capture_dspy_cost(lm, history_start)
-        return all_candidates
-
-    # Multiple windows: merge and deduplicate
-    logger.info("Merging {} candidates from {} windows...", len(all_candidates), len(windows))
-    merger = dspy.Refine(
-        dspy.ChainOfThought(MemoryMergeSignature),
-        N=2,
-        reward_fn=_extraction_reward,
-        threshold=1.0,
-    )
     with dspy.context(lm=lm):
-        merge_result = merger(candidates=all_candidates, metadata=meta)
+        for wi, window in enumerate(windows, 1):
+            logger.info("  Window {}/{}: extracting...", wi, len(windows))
+            w_start = time.time()
+            result = extractor(
+                transcript=window, metadata=meta, metrics=met, guidance=guid
+            )
+            primitives = getattr(result, "primitives", [])
+            if isinstance(primitives, list):
+                for item in primitives:
+                    if isinstance(item, MemoryCandidate):
+                        all_candidates.append(
+                            item.model_dump(mode="json", exclude_none=True)
+                        )
+                    elif isinstance(item, dict):
+                        all_candidates.append(item)
+            logger.info(
+                "  Window {}/{}: done ({:.1f}s, {} candidates)",
+                wi,
+                len(windows),
+                time.time() - w_start,
+                len(primitives) if isinstance(primitives, list) else 0,
+            )
     capture_dspy_cost(lm, history_start)
-    merged = getattr(merge_result, "primitives", [])
-    logger.info("Merge done: {} merged candidates", len(merged) if isinstance(merged, list) else 0)
-    if not isinstance(merged, list):
-        return all_candidates
-    return [
-        item.model_dump(mode="json", exclude_none=True)
-        if isinstance(item, MemoryCandidate)
-        else item
-        for item in merged
-        if isinstance(item, (MemoryCandidate, dict))
-    ]
+    return all_candidates
 
 
 def extract_memories_from_session_file(

@@ -202,7 +202,7 @@ def _build_dspy_lm_for_provider(
             api_key="ollama",
             api_base=api_base or _default_api_base("ollama"),
             cache=False,
-            max_tokens=16000,
+            max_tokens=32000,
         )
         if not thinking:
             kwargs["reasoning_effort"] = "none"
@@ -213,7 +213,7 @@ def _build_dspy_lm_for_provider(
             api_key="mlx",
             api_base=api_base or _default_api_base("mlx"),
             cache=False,
-            max_tokens=16000,
+            max_tokens=32000,
         )
     if provider == "openrouter":
         api_key = _api_key_for_provider(cfg, "openrouter")
@@ -229,7 +229,7 @@ def _build_dspy_lm_for_provider(
             api_key=api_key,
             api_base=api_base or _default_api_base("openrouter"),
             cache=False,
-            max_tokens=16000,
+            max_tokens=32000,
             extra_body=extra_body,
         )
     if provider in {"zai", "openai", "minimax"}:
@@ -246,7 +246,7 @@ def _build_dspy_lm_for_provider(
             api_key=api_key,
             api_base=api_base or _default_api_base(provider),
             cache=False,
-            max_tokens=16000,
+            max_tokens=32000,
         )
     raise RuntimeError(f"unsupported_dspy_provider:{provider}")
 

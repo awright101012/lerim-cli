@@ -29,6 +29,45 @@ from lerim.adapters.common import (
 )
 
 
+def compact_trace(raw_text: str) -> str:
+    """Strip tool outputs and thinking content from Cursor session JSONL.
+
+    Clears: toolFormerData[].result (replaced with size descriptor).
+    Clears: thinking block text (capabilityType 30, replaced with size descriptor).
+    Strips: empty array/dict fields on bubble objects to reduce noise.
+    """
+    kept: list[str] = []
+    for line in raw_text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        # Clear tool results in toolFormerData
+        tool_data = obj.get("toolFormerData")
+        if isinstance(tool_data, list):
+            for tool in tool_data:
+                if not isinstance(tool, dict):
+                    continue
+                result = tool.get("result")
+                if result is not None:
+                    tool["result"] = f"[cleared: {len(str(result))} chars]"
+        # Clear thinking blocks
+        if obj.get("capabilityType") == 30:
+            thinking = obj.get("thinking")
+            if isinstance(thinking, dict):
+                text = thinking.get("text", "")
+                thinking["text"] = f"[thinking cleared: {len(text)} chars]"
+                thinking.pop("signature", None)
+        # Strip empty array/dict/None fields to reduce noise
+        obj = {k: v for k, v in obj.items() if v or v == 0 or v is False}
+        kept.append(json.dumps(obj, ensure_ascii=False))
+    return "\n".join(kept) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
@@ -245,12 +284,13 @@ WHERE key LIKE 'bubbleId:%' ORDER BY key"""
             if known_run_ids and cid in known_run_ids:
                 continue
 
-            # Export JSONL: metadata first line, then bubbles
+            # Export JSONL: metadata first line, then bubbles (compacted)
             jsonl_path = out_dir / f"{cid}.jsonl"
-            with jsonl_path.open("w", encoding="utf-8") as fh:
-                fh.write(json.dumps(metadata) + "\n")
-                for bubble in bubble_list:
-                    fh.write(json.dumps(bubble) + "\n")
+            raw_lines = [json.dumps(metadata)]
+            for bubble in bubble_list:
+                raw_lines.append(json.dumps(bubble))
+            compacted = compact_trace("\n".join(raw_lines) + "\n")
+            jsonl_path.write_text(compacted, encoding="utf-8")
 
             message_count = sum(1 for b in bubble_list if b.get("type") in (1, 2))
             tool_count = sum(1 for b in bubble_list if b.get("type") not in (1, 2))

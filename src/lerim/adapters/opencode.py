@@ -28,6 +28,30 @@ from lerim.adapters.common import (
 )
 
 
+def compact_trace(raw_text: str) -> str:
+    """Strip tool outputs from OpenCode session JSONL.
+
+    Clears: tool_output field on tool messages (replaced with size descriptor).
+    Preserves: tool_name and tool_input for context.
+    First line (session metadata) is passed through unchanged.
+    """
+    kept: list[str] = []
+    for line in raw_text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        if obj.get("role") == "tool" and "tool_output" in obj:
+            output = obj["tool_output"]
+            obj["tool_output"] = f"[cleared: {len(str(output))} chars]"
+        kept.append(json.dumps(obj, ensure_ascii=False))
+    return "\n".join(kept) + "\n"
+
+
 def default_path() -> Path | None:
     """Return the default OpenCode storage root."""
     return Path("~/.local/share/opencode/").expanduser()
@@ -268,39 +292,40 @@ def _read_session_jsonl(path: Path, session_id: str | None) -> ViewerSession | N
 
 
 def _export_session_jsonl(session: ViewerSession, out_dir: Path) -> Path:
-    """Export a ViewerSession to a JSONL cache file, return the file path."""
+    """Export a ViewerSession to a compacted JSONL cache file, return the file path."""
     jsonl_path = out_dir / f"{session.session_id}.jsonl"
-    with jsonl_path.open("w", encoding="utf-8") as fh:
-        # First line: session metadata
-        fh.write(
-            json.dumps(
-                {
-                    "session_id": session.session_id,
-                    "cwd": session.cwd,
-                    "total_input_tokens": session.total_input_tokens,
-                    "total_output_tokens": session.total_output_tokens,
-                    "meta": session.meta,
-                },
-                ensure_ascii=True,
-            )
-            + "\n"
+    lines: list[str] = []
+    # First line: session metadata
+    lines.append(
+        json.dumps(
+            {
+                "session_id": session.session_id,
+                "cwd": session.cwd,
+                "total_input_tokens": session.total_input_tokens,
+                "total_output_tokens": session.total_output_tokens,
+                "meta": session.meta,
+            },
+            ensure_ascii=True,
         )
-        # Remaining lines: one per message
-        for msg in session.messages:
-            row: dict[str, Any] = {"role": msg.role}
-            if msg.content is not None:
-                row["content"] = msg.content
-            if msg.timestamp:
-                row["timestamp"] = msg.timestamp
-            if msg.model:
-                row["model"] = msg.model
-            if msg.tool_name:
-                row["tool_name"] = msg.tool_name
-            if msg.tool_input is not None:
-                row["tool_input"] = msg.tool_input
-            if msg.tool_output is not None:
-                row["tool_output"] = msg.tool_output
-            fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+    )
+    # Remaining lines: one per message
+    for msg in session.messages:
+        row: dict[str, Any] = {"role": msg.role}
+        if msg.content is not None:
+            row["content"] = msg.content
+        if msg.timestamp:
+            row["timestamp"] = msg.timestamp
+        if msg.model:
+            row["model"] = msg.model
+        if msg.tool_name:
+            row["tool_name"] = msg.tool_name
+        if msg.tool_input is not None:
+            row["tool_input"] = msg.tool_input
+        if msg.tool_output is not None:
+            row["tool_output"] = msg.tool_output
+        lines.append(json.dumps(row, ensure_ascii=True))
+    compacted = compact_trace("\n".join(lines) + "\n")
+    jsonl_path.write_text(compacted, encoding="utf-8")
     return jsonl_path
 
 

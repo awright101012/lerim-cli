@@ -7,6 +7,7 @@ from pathlib import Path
 
 from lerim.adapters.codex import (
     _extract_message_text,
+    compact_trace,
     count_sessions,
     find_session_path,
     iter_sessions,
@@ -131,7 +132,12 @@ def test_iter_sessions_skips_known_ids(tmp_path):
     )
     _write_codex_jsonl(
         tmp_path / "new.jsonl",
-        [{"type": "event_msg", "payload": {"type": "user_message", "message": "hello"}}],
+        [
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "hello"},
+            }
+        ],
     )
     # Skip "stable" by providing its ID
     records = iter_sessions(
@@ -140,3 +146,84 @@ def test_iter_sessions_skips_known_ids(tmp_path):
     )
     assert len(records) == 1
     assert records[0].run_id == "new"
+
+
+# --- compact_trace tests ---
+
+
+def test_compact_trace_drops_turn_context():
+    """compact_trace drops turn_context lines."""
+    lines = [
+        json.dumps({"type": "turn_context", "payload": {"files": ["a.py"]}}),
+        json.dumps(
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "hi"}}
+        ),
+    ]
+    result = compact_trace("\n".join(lines) + "\n")
+    parsed = [json.loads(l) for l in result.strip().split("\n")]
+    assert len(parsed) == 1
+    assert parsed[0]["type"] == "event_msg"
+
+
+def test_compact_trace_strips_base_instructions():
+    """compact_trace removes base_instructions from session_meta."""
+    entry = {
+        "type": "session_meta",
+        "payload": {"id": "s1", "cwd": "/tmp", "base_instructions": "x" * 10_000},
+    }
+    result = compact_trace(json.dumps(entry) + "\n")
+    parsed = json.loads(result.strip())
+    assert "base_instructions" not in parsed["payload"]
+    assert parsed["payload"]["id"] == "s1"
+
+
+def test_compact_trace_clears_function_call_output():
+    """compact_trace replaces function_call_output content with size descriptor."""
+    entry = {
+        "type": "response_item",
+        "payload": {"type": "function_call_output", "output": "x" * 50_000},
+    }
+    result = compact_trace(json.dumps(entry) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed["payload"]["output"] == "[cleared: 50000 chars]"
+
+
+def test_compact_trace_clears_reasoning():
+    """compact_trace replaces reasoning content with size descriptor."""
+    entry = {
+        "type": "response_item",
+        "payload": {
+            "type": "reasoning",
+            "content": [{"type": "text", "text": "y" * 8000}],
+        },
+    }
+    result = compact_trace(json.dumps(entry) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed["payload"]["content"] == "[reasoning cleared: 8000 chars]"
+
+
+def test_compact_trace_clears_agent_reasoning():
+    """compact_trace replaces agent_reasoning event message with size descriptor."""
+    entry = {
+        "type": "event_msg",
+        "payload": {"type": "agent_reasoning", "message": "z" * 3000},
+    }
+    result = compact_trace(json.dumps(entry) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed["payload"]["message"] == "[reasoning cleared: 3000 chars]"
+
+
+def test_compact_trace_preserves_function_call():
+    """compact_trace keeps function_call name and arguments intact."""
+    entry = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "name": "read_file",
+            "arguments": '{"path": "/tmp/x.py"}',
+        },
+    }
+    result = compact_trace(json.dumps(entry) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed["payload"]["name"] == "read_file"
+    assert parsed["payload"]["arguments"] == '{"path": "/tmp/x.py"}'

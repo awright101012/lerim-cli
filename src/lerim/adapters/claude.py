@@ -18,15 +18,15 @@ from lerim.adapters.common import (
 
 
 def compact_trace(raw_text: str) -> str:
-    """Remove non-conversational noise from Claude trace JSONL.
+    """Remove non-conversational noise and strip tool outputs from Claude trace JSONL.
 
     Drops: progress, file-history-snapshot, queue-operation, pr-link lines.
     Strips: metadata fields not needed for extraction (parentUuid, toolUseResult, etc.).
-    Truncates: oversized tool_result content blocks (> 50K chars).
+    Clears: all tool_result content (replaced with size descriptor).
+    Clears: thinking block content (replaced with size descriptor).
     """
     drop_types = {"progress", "file-history-snapshot", "queue-operation", "pr-link"}
     keep_fields = {"type", "message", "timestamp"}
-    tool_result_max_chars = 50_000
     kept: list[str] = []
     for line in raw_text.split("\n"):
         stripped = line.strip()
@@ -41,7 +41,7 @@ def compact_trace(raw_text: str) -> str:
             continue
         # Strip to only conversation-relevant fields
         obj = {k: v for k, v in obj.items() if k in keep_fields}
-        # Truncate oversized tool_result content
+        # Clear tool_result content and thinking blocks
         msg = obj.get("message")
         if isinstance(msg, dict):
             content = msg.get("content")
@@ -51,20 +51,19 @@ def compact_trace(raw_text: str) -> str:
                         continue
                     if block.get("type") == "tool_result":
                         inner = block.get("content", "")
-                        if isinstance(inner, str) and len(inner) > tool_result_max_chars:
-                            block["content"] = inner[:tool_result_max_chars] + "\n[truncated]"
+                        if isinstance(inner, str):
+                            block["content"] = f"[cleared: {len(inner)} chars]"
                         elif isinstance(inner, list):
-                            total = 0
-                            for sub in inner:
-                                if not isinstance(sub, dict):
-                                    continue
-                                text = sub.get("text", "")
-                                remaining = tool_result_max_chars - total
-                                if remaining <= 0:
-                                    sub["text"] = "[truncated]"
-                                elif len(text) > remaining:
-                                    sub["text"] = text[:remaining] + "\n[truncated]"
-                                total += len(sub.get("text", ""))
+                            total = sum(
+                                len(s.get("text", ""))
+                                for s in inner
+                                if isinstance(s, dict)
+                            )
+                            block["content"] = f"[cleared: {total} chars]"
+                    elif block.get("type") == "thinking":
+                        text = block.get("thinking", "")
+                        block["thinking"] = f"[thinking cleared: {len(text)} chars]"
+                        block.pop("signature", None)
         kept.append(json.dumps(obj, ensure_ascii=False))
     return "\n".join(kept) + "\n"
 

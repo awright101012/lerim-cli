@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 
 from lerim.adapters.opencode import (
+    compact_trace,
     count_sessions,
     read_session,
     validate_connection,
@@ -171,3 +172,53 @@ def test_iter_sessions_skips_known_ids(tmp_path):
         known_run_ids={"sess-1"},
     )
     assert len(records) == 0
+
+
+# --- compact_trace tests ---
+
+
+def test_compact_trace_clears_tool_output():
+    """compact_trace replaces tool_output with size descriptor."""
+    lines = [
+        json.dumps({"session_id": "s1", "cwd": "/tmp"}),
+        json.dumps(
+            {
+                "role": "tool",
+                "tool_name": "bash",
+                "tool_input": "ls -la",
+                "tool_output": "x" * 8000,
+            }
+        ),
+    ]
+    result = compact_trace("\n".join(lines) + "\n")
+    parsed = [json.loads(l) for l in result.strip().split("\n")]
+    assert parsed[0]["session_id"] == "s1"
+    assert parsed[1]["tool_name"] == "bash"
+    assert parsed[1]["tool_input"] == "ls -la"
+    assert parsed[1]["tool_output"] == "[cleared: 8000 chars]"
+
+
+def test_compact_trace_preserves_user_assistant_messages():
+    """compact_trace preserves user and assistant message content."""
+    lines = [
+        json.dumps({"session_id": "s1", "cwd": "/tmp"}),
+        json.dumps({"role": "user", "content": "hello"}),
+        json.dumps({"role": "assistant", "content": "world"}),
+    ]
+    result = compact_trace("\n".join(lines) + "\n")
+    parsed = [json.loads(l) for l in result.strip().split("\n")]
+    assert parsed[1]["content"] == "hello"
+    assert parsed[2]["content"] == "world"
+
+
+def test_compact_trace_preserves_session_metadata():
+    """compact_trace passes session metadata through unchanged."""
+    meta = {
+        "session_id": "s1",
+        "cwd": "/tmp",
+        "total_input_tokens": 100,
+        "meta": {"version": "1.0"},
+    }
+    result = compact_trace(json.dumps(meta) + "\n")
+    parsed = json.loads(result.strip())
+    assert parsed == meta
