@@ -47,14 +47,20 @@ def _run_with_heartbeat(
         t.join(timeout=2)
 
 
-def invoke_judge(agent: str, prompt: str, timeout: int = 120) -> dict:
+def invoke_judge(agent: str, prompt: str, timeout: int = 120, model: str | None = None) -> dict:
     """Invoke a coding agent CLI as judge, return parsed JSON."""
     if agent == "claude":
         cmd = ["claude", "-p", prompt, "--output-format", "json", "--allowedTools", "Read"]
+        if model:
+            cmd.extend(["--model", model])
     elif agent == "codex":
         cmd = ["codex", "exec", prompt, "--json", "--ephemeral"]
+        if model:
+            cmd.extend(["--model", model])
     elif agent == "opencode":
         cmd = ["opencode", "run", prompt, "--format", "json"]
+        if model:
+            cmd.extend(["--model", model])
     else:
         raise ValueError(f"Unknown judge agent: {agent}")
 

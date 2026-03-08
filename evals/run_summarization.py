@@ -83,6 +83,7 @@ def run_summarization_eval(
 
         judge_agent = config.get("judge", {}).get("agent", "claude")
         judge_timeout = config.get("judge", {}).get("timeout_seconds", 300)
+        judge_model = config.get("judge", {}).get("model")
         effective_traces_dir = traces_dir or TRACES_DIR
         traces = sorted(effective_traces_dir.glob("*.jsonl")) + sorted(
             effective_traces_dir.glob("*.json")
@@ -131,7 +132,7 @@ def run_summarization_eval(
             try:
                 output_json = json.dumps(output, indent=2, ensure_ascii=False)
                 prompt = build_judge_prompt(JUDGE_PROMPT, trace_path, output_json)
-                judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout)
+                judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout, model=judge_model)
                 completeness = float(judge_result.get("completeness", 0))
                 faithfulness = float(judge_result.get("faithfulness", 0))
                 clarity = float(judge_result.get("clarity", 0))
@@ -196,7 +197,7 @@ def run_summarization_eval(
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "pipeline": "summarization",
             "config": summarization_cfg,
-            "judge": {"agent": judge_agent, "model": ""},
+            "judge": {"agent": judge_agent, "model": judge_model or ""},
             "performance": {
                 "total_wall_time_s": round(total_wall, 2),
                 "avg_time_per_trace_s": round(total_wall / len(traces), 2)

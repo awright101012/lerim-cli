@@ -188,6 +188,7 @@ def _run_sync_eval(
     judge_timeout: int,
     trace_index: int,
     total_traces: int,
+    judge_model: str | None = None,
 ) -> dict:
     """Run one sync + judge and return score dict."""
     from lerim.runtime.agent import LerimAgent
@@ -244,7 +245,7 @@ def _run_sync_eval(
             run_folder,
             memory_before,
         )
-        judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout)
+        judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout, model=judge_model)
         completeness = float(judge_result.get("completeness", 0))
         faithfulness = float(judge_result.get("faithfulness", 0))
         coherence = float(judge_result.get("coherence", 0))
@@ -290,6 +291,7 @@ def _run_maintain_eval(
     judge_agent: str,
     judge_timeout: int,
     after_trace_index: int,
+    judge_model: str | None = None,
 ) -> dict:
     """Run one maintain + judge and return score dict."""
     from lerim.runtime.agent import LerimAgent
@@ -341,7 +343,7 @@ def _run_maintain_eval(
             memory_before,
             memory_after,
         )
-        judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout)
+        judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout, model=judge_model)
         completeness = float(judge_result.get("completeness", 0))
         faithfulness = float(judge_result.get("faithfulness", 0))
         coherence = float(judge_result.get("coherence", 0))
@@ -395,6 +397,7 @@ def run_lifecycle_eval(
     try:
         judge_agent = config.get("judge", {}).get("agent", "claude")
         judge_timeout = config.get("judge", {}).get("timeout_seconds", 300)
+        judge_model = config.get("judge", {}).get("model")
         effective_traces_dir = traces_dir or TRACES_DIR
         traces = sorted(effective_traces_dir.glob("*.jsonl")) + sorted(
             effective_traces_dir.glob("*.json")
@@ -445,6 +448,7 @@ def run_lifecycle_eval(
                 judge_timeout,
                 i,
                 len(traces),
+                judge_model=judge_model,
             )
             sync_scores.append(sync_result)
             syncs_since_maintain += 1
@@ -458,6 +462,7 @@ def run_lifecycle_eval(
                     judge_agent,
                     judge_timeout,
                     i,
+                    judge_model=judge_model,
                 )
                 maintain_scores.append(maintain_result)
                 syncs_since_maintain = 0
@@ -471,6 +476,7 @@ def run_lifecycle_eval(
                 judge_agent,
                 judge_timeout,
                 len(traces),
+                judge_model=judge_model,
             )
             maintain_scores.append(maintain_result)
 
@@ -507,7 +513,7 @@ def run_lifecycle_eval(
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "pipeline": "lifecycle",
             "config": roles_cfg,
-            "judge": {"agent": judge_agent},
+            "judge": {"agent": judge_agent, "model": judge_model or ""},
             "performance": {
                 "total_wall_time_s": round(total_wall, 2),
                 "trace_count": len(traces),

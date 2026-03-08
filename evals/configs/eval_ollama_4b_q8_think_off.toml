@@ -1,6 +1,7 @@
 # Eval config — Ollama Qwen3.5 4B Q8_0 with thinking OFF.
 [judge]
 agent = "claude"
+model = "claude-haiku-4-5-20251001"
 timeout_seconds = 2000
 
 [lead]
