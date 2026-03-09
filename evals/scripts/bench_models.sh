@@ -73,9 +73,10 @@ config_idx=0
 for config in "${configs[@]}"; do
     config_idx=$((config_idx + 1))
     config_name=$(basename "$config" .toml)
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "============================================================"
     echo "[$config_idx/$total_configs] $config_name"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "============================================================"
 
     for pipeline in $PIPELINES; do
         echo ""
@@ -90,11 +91,11 @@ for config in "${configs[@]}"; do
             continue
         fi
 
+        # Run directly without piping through read loop (preserves rich output)
         PYTHONUNBUFFERED=1 PYTHONPATH=. python3 "$runner" \
             --config "$config" \
             --traces-dir "$traces_dir" \
-            --limit "$LIMIT" \
-            2>&1 | while IFS= read -r line; do echo "  $line"; done
+            --limit "$LIMIT"
 
         echo ""
     done
@@ -103,13 +104,13 @@ done
 # --- Comparison table ---------------------------------------------------------
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "============================================================"
 echo "COMPARISON TABLE"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "============================================================"
 echo ""
 
 for pipeline in $PIPELINES; do
-    PYTHONPATH=. python3 evals/compare.py --pipeline "$pipeline" 2>&1
+    PYTHONPATH=. python3 evals/compare.py --pipeline "$pipeline"
 done
 
 echo ""

@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
-import tempfile
 import time
 import tomllib
 from datetime import datetime, timezone
@@ -20,6 +18,13 @@ from pathlib import Path
 
 from lerim.config.logging import logger
 
+from evals.common import (
+    cleanup_eval,
+    configure_dspy_from_eval,
+    console,
+    make_progress,
+    print_extraction_table,
+)
 from evals.judge import build_judge_prompt, invoke_judge
 from evals.scores import (
     EvalScore,
@@ -34,38 +39,6 @@ RESULTS_DIR = EVALS_DIR / "results"
 JUDGE_PROMPT = EVALS_DIR / "judge_prompts" / "extraction.md"
 
 
-def _configure_dspy_from_eval(config: dict) -> tuple:
-    """Build isolated eval config for extraction. Returns (Config, temp_dir_path)."""
-    REQUIRED_SECTIONS = ("lead", "explorer", "extraction", "summarization")
-    missing = [s for s in REQUIRED_SECTIONS if s not in config]
-    if missing:
-        raise ValueError(
-            f"Eval config missing required sections: {missing}. "
-            f"All of {REQUIRED_SECTIONS} are required."
-        )
-
-    section_to_role = {
-        "lead": "lead",
-        "explorer": "explorer",
-        "extraction": "extract",
-        "summarization": "summarize",
-    }
-    roles_override = {
-        role_name: config[section_name]
-        for section_name, role_name in section_to_role.items()
-    }
-
-    temp_dir = Path(tempfile.mkdtemp(prefix="lerim_eval_extraction_"))
-    (temp_dir / "memory").mkdir()
-    (temp_dir / "index").mkdir()
-
-    from lerim.config.settings import build_eval_config, set_config_override
-
-    eval_cfg = build_eval_config(roles_override, temp_dir)
-    set_config_override(eval_cfg)
-    return eval_cfg, temp_dir
-
-
 def run_extraction_eval(
     config_path: Path, traces_dir: Path | None = None, limit: int = 0
 ) -> dict:
@@ -73,7 +46,9 @@ def run_extraction_eval(
     with config_path.open("rb") as f:
         config = tomllib.load(f)
 
-    eval_cfg, temp_dir = _configure_dspy_from_eval(config)
+    eval_cfg, temp_dir = configure_dspy_from_eval(
+        config, prefix="lerim_eval_extraction_"
+    )
 
     try:
         from lerim.memory.extract_pipeline import extract_memories_from_session_file
@@ -96,78 +71,88 @@ def run_extraction_eval(
         per_trace: list[dict] = []
         total_start = time.time()
 
-        for i, trace_path in enumerate(traces, 1):
-            logger.info("[{}/{}] Evaluating: {}", i, len(traces), trace_path.name)
-            t0 = time.time()
+        with make_progress() as progress:
+            task = progress.add_task("Extraction", total=len(traces))
 
-            # Run extraction pipeline
-            try:
-                output = extract_memories_from_session_file(trace_path)
-            except Exception as e:
-                logger.warning("Pipeline error: {}", e)
-                per_trace.append(
-                    EvalScore(
-                        trace=trace_path.name,
-                        schema_ok=False,
-                        judge_reasoning=str(e),
-                    ).__dict__
+            for i, trace_path in enumerate(traces, 1):
+                progress.update(task, description=f"[extract] {trace_path.name}")
+                t0 = time.time()
+
+                # Run extraction pipeline
+                try:
+                    output = extract_memories_from_session_file(trace_path)
+                except Exception as e:
+                    logger.warning("Pipeline error on {}: {}", trace_path.name, e)
+                    per_trace.append(
+                        EvalScore(
+                            trace=trace_path.name,
+                            schema_ok=False,
+                            judge_reasoning=str(e),
+                        ).__dict__
+                    )
+                    progress.advance(task)
+                    continue
+
+                extract_time = time.time() - t0
+                logger.info(
+                    "[{}/{}] Extracted {} candidates ({:.1f}s)",
+                    i,
+                    len(traces),
+                    len(output),
+                    extract_time,
                 )
-                continue
 
-            extract_time = time.time() - t0
-            logger.info(
-                "[{}/{}] Extraction done ({:.1f}s, {} candidates)",
-                i, len(traces), extract_time, len(output),
-            )
+                # Deterministic checks
+                schema_ok = check_extraction_schema(output)
+                has_candidates = isinstance(output, list) and len(output) > 0
 
-            # Deterministic checks
-            schema_ok = check_extraction_schema(output)
-            has_candidates = isinstance(output, list) and len(output) > 0
+                # Judge scoring
+                progress.update(task, description=f"[judge] {trace_path.name}")
+                judge_start = time.time()
+                try:
+                    output_json = json.dumps(output, indent=2, ensure_ascii=False)
+                    prompt = build_judge_prompt(JUDGE_PROMPT, trace_path, output_json)
+                    judge_result = invoke_judge(
+                        judge_agent, prompt, timeout=judge_timeout, model=judge_model
+                    )
+                    completeness = float(judge_result.get("completeness", 0))
+                    faithfulness = float(judge_result.get("faithfulness", 0))
+                    clarity = float(judge_result.get("clarity", 0))
+                    reasoning = judge_result.get("reasoning", "")
+                except Exception as e:
+                    logger.warning("Judge error on {}: {}", trace_path.name, e)
+                    completeness = faithfulness = clarity = 0.0
+                    reasoning = f"Judge failed: {e}"
 
-            # Judge scoring
-            logger.info("[{}/{}] Judging...", i, len(traces))
-            judge_start = time.time()
-            try:
-                output_json = json.dumps(output, indent=2, ensure_ascii=False)
-                prompt = build_judge_prompt(JUDGE_PROMPT, trace_path, output_json)
-                judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout, model=judge_model)
-                completeness = float(judge_result.get("completeness", 0))
-                faithfulness = float(judge_result.get("faithfulness", 0))
-                clarity = float(judge_result.get("clarity", 0))
-                reasoning = judge_result.get("reasoning", "")
-            except Exception as e:
-                logger.warning("Judge error: {}", e)
-                completeness = faithfulness = clarity = 0.0
-                reasoning = f"Judge failed: {e}"
+                judge_time = time.time() - judge_start
+                wall_time = time.time() - t0
 
-            judge_time = time.time() - judge_start
-            wall_time = time.time() - t0
-            logger.info("[{}/{}] Judge done ({:.1f}s)", i, len(traces), judge_time)
+                composite = compute_composite(completeness, faithfulness, clarity)
 
-            composite = compute_composite(completeness, faithfulness, clarity)
-
-            score = EvalScore(
-                trace=trace_path.name,
-                schema_ok=schema_ok,
-                has_candidates=has_candidates,
-                completeness=completeness,
-                faithfulness=faithfulness,
-                clarity=clarity,
-                composite=composite,
-                wall_time_s=round(wall_time, 2),
-                judge_reasoning=reasoning,
-                candidate_count=len(output),
-            )
-            per_trace.append(score.__dict__)
-            logger.success(
-                "[{}/{}] schema={} candidates={} composite={:.2f} time={:.1f}s",
-                i,
-                len(traces),
-                schema_ok,
-                len(output),
-                composite,
-                wall_time,
-            )
+                score = EvalScore(
+                    trace=trace_path.name,
+                    schema_ok=schema_ok,
+                    has_candidates=has_candidates,
+                    completeness=completeness,
+                    faithfulness=faithfulness,
+                    clarity=clarity,
+                    composite=composite,
+                    wall_time_s=round(wall_time, 2),
+                    judge_reasoning=reasoning,
+                    candidate_count=len(output),
+                )
+                per_trace.append(score.__dict__)
+                logger.success(
+                    "[{}/{}] schema={} cands={} comp={:.2f} ({:.0f}s extract, {:.0f}s judge)",
+                    i,
+                    len(traces),
+                    schema_ok,
+                    len(output),
+                    composite,
+                    extract_time,
+                    judge_time,
+                )
+                progress.advance(task)
 
         total_wall = time.time() - total_start
 
@@ -209,32 +194,14 @@ def run_extraction_eval(
         out_path.write_text(
             json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        logger.info("Results saved to: {}", out_path)
+        console.print(f"\nResults saved to: [bold]{out_path}[/]")
 
         # Print summary table
-        print(
-            f"\n{'Trace':<40} {'Schema':>6} {'Cands':>5} {'Compl':>6} {'Faith':>6} {'Clar':>6} {'COMP':>6} {'Time':>6}"
-        )
-        print("-" * 90)
-        for t in per_trace:
-            print(
-                f"{t['trace']:<40} {'ok' if t['schema_ok'] else 'FAIL':>6} {t.get('candidate_count', 0):>5} "
-                f"{t['completeness']:>6.2f} {t['faithfulness']:>6.2f} {t['clarity']:>6.2f} "
-                f"{t['composite']:>6.2f} {t['wall_time_s']:>5.1f}s"
-            )
-        print("-" * 90)
-        print(
-            f"{'AVERAGE':<40} {agg['schema_ok']:>6.2f} {'':>5} "
-            f"{agg['completeness']:>6.2f} {agg['faithfulness']:>6.2f} {agg['clarity']:>6.2f} "
-            f"{agg['composite']:>6.2f} {agg['wall_time_s']:>5.1f}s"
-        )
+        print_extraction_table(per_trace, agg)
 
         return result
     finally:
-        from lerim.config.settings import set_config_override
-
-        set_config_override(None)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        cleanup_eval(temp_dir)
 
 
 if __name__ == "__main__":

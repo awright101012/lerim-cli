@@ -1,4 +1,4 @@
-"""Lifecycle eval runner — sequential syncs with periodic maintains.
+"""Lifecycle eval runner -- sequential syncs with periodic maintains.
 
 Simulates realistic memory accumulation. All syncs are judge-scored.
 Maintains run periodically to test dedup, merge, archive, consolidation.
@@ -21,7 +21,13 @@ from pathlib import Path
 
 from lerim.config.logging import logger
 
-from evals.judge import invoke_judge
+from evals.common import (
+    cleanup_eval,
+    console,
+    make_progress,
+    print_lifecycle_table,
+)
+from evals.judge import JUDGE_SCHEMA_COHERENCE, invoke_judge
 from evals.scores import EvalScore, compute_composite
 
 
@@ -94,7 +100,11 @@ def _list_memory_titles(memory_root: Path) -> list[str]:
 
 
 def _configure_from_eval(config: dict) -> tuple:
-    """Build isolated eval config for lifecycle. Returns (Config, temp_dir)."""
+    """Build isolated eval config for lifecycle. Returns (Config, temp_dir).
+
+    Unlike the shared configure_dspy_from_eval, lifecycle needs extra subdirs
+    (workspace, archived, summaries) so we create them here.
+    """
     REQUIRED_SECTIONS = ("lead", "explorer", "extraction", "summarization")
     missing = [s for s in REQUIRED_SECTIONS if s not in config]
     if missing:
@@ -245,12 +255,23 @@ def _run_sync_eval(
             run_folder,
             memory_before,
         )
-        judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout, model=judge_model)
+        judge_result = invoke_judge(
+            judge_agent,
+            prompt,
+            timeout=judge_timeout,
+            model=judge_model,
+            schema=JUDGE_SCHEMA_COHERENCE,
+        )
         completeness = float(judge_result.get("completeness", 0))
         faithfulness = float(judge_result.get("faithfulness", 0))
         coherence = float(judge_result.get("coherence", 0))
         reasoning = judge_result.get("reasoning", "")
-        logger.info("[{}/{}] Judge done ({:.1f}s)", trace_index, total_traces, time.time() - judge_start)
+        logger.info(
+            "[{}/{}] Judge done ({:.1f}s)",
+            trace_index,
+            total_traces,
+            time.time() - judge_start,
+        )
     except Exception as e:
         logger.warning("Judge error: {}", e)
         reasoning = f"Judge failed: {e}"
@@ -343,12 +364,22 @@ def _run_maintain_eval(
             memory_before,
             memory_after,
         )
-        judge_result = invoke_judge(judge_agent, prompt, timeout=judge_timeout, model=judge_model)
+        judge_result = invoke_judge(
+            judge_agent,
+            prompt,
+            timeout=judge_timeout,
+            model=judge_model,
+            schema=JUDGE_SCHEMA_COHERENCE,
+        )
         completeness = float(judge_result.get("completeness", 0))
         faithfulness = float(judge_result.get("faithfulness", 0))
         coherence = float(judge_result.get("coherence", 0))
         reasoning = judge_result.get("reasoning", "")
-        logger.info("[{}/...] Judge done ({:.1f}s)", after_trace_index, time.time() - judge_start)
+        logger.info(
+            "[{}/...] Judge done ({:.1f}s)",
+            after_trace_index,
+            time.time() - judge_start,
+        )
     except Exception as e:
         logger.warning("Judge error: {}", e)
         reasoning = f"Judge failed: {e}"
@@ -356,7 +387,7 @@ def _run_maintain_eval(
     composite = compute_composite(completeness, faithfulness, coherence)
 
     logger.success(
-        "[{}/...] maintain: merged={} archived={} {}→{} composite={:.2f} time={:.0f}s",
+        "[{}/...] maintain: merged={} archived={} {}>{} composite={:.2f} time={:.0f}s",
         after_trace_index,
         counts.get("merged", 0),
         counts.get("archived", 0),
@@ -421,15 +452,12 @@ def run_lifecycle_eval(
             f"{first_section.get('model', '?')} ({first_section.get('provider', '?')})"
         )
 
-        logger.info(
-            "Lifecycle eval: {} traces, maintain every {}", len(traces), maintain_every
+        console.print(
+            f"\n[bold]Lifecycle eval[/]: {len(traces)} traces, maintain every {maintain_every}"
         )
-        logger.info("Config: {}, judge: {}", model_label, judge_agent)
-        logger.info(
-            "Traces dir: {} ({} available, using {})",
-            effective_traces_dir,
-            total_available,
-            len(traces),
+        console.print(f"  Config: {model_label}, judge: {judge_agent}")
+        console.print(
+            f"  Traces: {effective_traces_dir} ({total_available} available, using {len(traces)})\n"
         )
 
         sync_scores: list[dict] = []
@@ -437,35 +465,43 @@ def run_lifecycle_eval(
         total_start = time.time()
         syncs_since_maintain = 0
 
-        for i, trace_path in enumerate(traces, 1):
-            # Run sync
-            sync_result = _run_sync_eval(
-                eval_cfg,
-                trace_path,
-                memory_root,
-                workspace_root,
-                judge_agent,
-                judge_timeout,
-                i,
-                len(traces),
-                judge_model=judge_model,
-            )
-            sync_scores.append(sync_result)
-            syncs_since_maintain += 1
+        with make_progress() as progress:
+            task = progress.add_task("Lifecycle", total=len(traces))
 
-            # Run maintain every N syncs
-            if maintain_every > 0 and i % maintain_every == 0:
-                maintain_result = _run_maintain_eval(
+            for i, trace_path in enumerate(traces, 1):
+                progress.update(task, description=f"[sync] {trace_path.name}")
+
+                # Run sync
+                sync_result = _run_sync_eval(
                     eval_cfg,
+                    trace_path,
                     memory_root,
                     workspace_root,
                     judge_agent,
                     judge_timeout,
                     i,
+                    len(traces),
                     judge_model=judge_model,
                 )
-                maintain_scores.append(maintain_result)
-                syncs_since_maintain = 0
+                sync_scores.append(sync_result)
+                syncs_since_maintain += 1
+
+                # Run maintain every N syncs
+                if maintain_every > 0 and i % maintain_every == 0:
+                    progress.update(task, description=f"[maintain] after trace {i}")
+                    maintain_result = _run_maintain_eval(
+                        eval_cfg,
+                        memory_root,
+                        workspace_root,
+                        judge_agent,
+                        judge_timeout,
+                        i,
+                        judge_model=judge_model,
+                    )
+                    maintain_scores.append(maintain_result)
+                    syncs_since_maintain = 0
+
+                progress.advance(task)
 
         # Final maintain if there were syncs since last maintain
         if syncs_since_maintain > 0 and maintain_every > 0:
@@ -494,7 +530,6 @@ def run_lifecycle_eval(
             else 0
         )
 
-        # Overall: weighted by count
         total_evals = len(sync_scores) + len(maintain_scores)
         overall_composite = (
             (sum(sync_composites) + sum(maintain_composites)) / total_evals
@@ -545,56 +580,21 @@ def run_lifecycle_eval(
         out_path.write_text(
             json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        logger.info("Results saved to: {}", out_path)
+        console.print(f"\nResults saved to: [bold]{out_path}[/]")
 
-        # Print summary table
-        print(f"\n{'=' * 70}")
-        print(f"Lifecycle Eval Summary")
-        print(f"{'=' * 70}")
-        print(f"  Traces:     {len(traces)}")
-        print(f"  Syncs:      {len(sync_scores)}")
-        print(f"  Maintains:  {len(maintain_scores)}")
-        print(f"  Total time: {total_wall:.0f}s")
-        print()
-
-        print(
-            f"{'Trace':<35} {'Mem':>4} {'Add':>4} {'Upd':>4} {'Nop':>4} {'COMP':>6} {'Time':>6}"
+        # Print summary tables
+        print_lifecycle_table(
+            sync_scores,
+            maintain_scores,
+            sync_composite,
+            maintain_composite,
+            overall_composite,
+            total_wall,
         )
-        print("-" * 70)
-        for s in sync_scores:
-            c = s.get("counts", {})
-            print(
-                f"{s.get('trace', '?'):<35} {s.get('memory_count_before', 0):>4} "
-                f"{c.get('add', 0):>4} {c.get('update', 0):>4} {c.get('no_op', 0):>4} "
-                f"{s.get('composite', 0):>6.2f} {s.get('wall_time_s', 0):>5.0f}s"
-            )
-
-        if maintain_scores:
-            print()
-            print(
-                f"{'Maintain after':<20} {'Before':>6} {'After':>6} {'Mrgd':>5} {'Arch':>5} {'COMP':>6} {'Time':>6}"
-            )
-            print("-" * 60)
-            for m in maintain_scores:
-                c = m.get("counts", {})
-                print(
-                    f"trace {m.get('after_trace_index', '?'):<15} "
-                    f"{m.get('memory_before', 0):>6} {m.get('memory_after', 0):>6} "
-                    f"{c.get('merged', 0):>5} {c.get('archived', 0):>5} "
-                    f"{m.get('composite', 0):>6.2f} {m.get('wall_time_s', 0):>5.0f}s"
-                )
-
-        print()
-        print(f"  Sync composite:     {sync_composite:.3f}")
-        print(f"  Maintain composite: {maintain_composite:.3f}")
-        print(f"  Overall composite:  {overall_composite:.3f}")
 
         return result
     finally:
-        from lerim.config.settings import set_config_override
-
-        set_config_override(None)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        cleanup_eval(temp_dir)
 
 
 if __name__ == "__main__":

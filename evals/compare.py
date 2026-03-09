@@ -1,7 +1,7 @@
 """Compare eval results across multiple runs and configs.
 
 Reads all JSON result files from evals/results/, groups by pipeline,
-and prints a comparison table showing scores, timings, and config info.
+and prints a rich comparison table showing scores, timings, and config info.
 
 Usage: python evals/compare.py [--pipeline extraction|summarization|lifecycle]
 """
@@ -12,35 +12,21 @@ import argparse
 import json
 from pathlib import Path
 
+from evals.common import console, print_compare_table
+
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
 
-def _model_label(config: dict) -> str:
-    """Build a short label from config model name and provider."""
-    # Lifecycle configs are nested dicts {lead: {...}, extraction: {...}, ...}
-    # Single-pipeline configs are flat {model: ..., provider: ...}
-    if "model" in config:
-        model = config.get("model", "unknown")
-        provider = config.get("provider", "")
-    else:
-        # Try extraction section first, then lead
-        section = config.get("extraction", config.get("lead", {}))
-        model = section.get("model", "unknown")
-        provider = section.get("provider", "")
-    short_model = model.split("/")[-1] if "/" in model else model
-    return f"{short_model} ({provider})" if provider else short_model
-
-
 def compare_results(pipeline_filter: str | None = None) -> None:
-    """Load all result JSONs and print comparison table."""
+    """Load all result JSONs and print comparison tables."""
     if not RESULTS_DIR.exists():
-        print("No results directory found. Run evals first.")
+        console.print("[yellow]No results directory found. Run evals first.[/]")
         return
 
     result_files = sorted(RESULTS_DIR.glob("*.json"))
     if not result_files:
-        print("No result files found in evals/results/.")
+        console.print("[yellow]No result files found in evals/results/.[/]")
         return
 
     # Group by pipeline
@@ -56,64 +42,14 @@ def compare_results(pipeline_filter: str | None = None) -> None:
         groups.setdefault(pipeline, []).append(data)
 
     if not groups:
-        print(
-            f"No results found{f' for pipeline={pipeline_filter}' if pipeline_filter else ''}."
+        console.print(
+            f"[yellow]No results found"
+            f"{f' for pipeline={pipeline_filter}' if pipeline_filter else ''}.[/]"
         )
         return
 
     for pipeline, runs in sorted(groups.items()):
-        print(f"\nPipeline: {pipeline}")
-
-        if pipeline == "lifecycle":
-            header = (
-                f"{'Config':<40} {'sync':>6} {'maint':>6} {'overall':>7} {'time':>7}"
-            )
-            print(header)
-            print("-" * len(header))
-            for run in runs:
-                label = _model_label(run.get("config", {}))
-                scores = run.get("scores", {})
-                perf = run.get("performance", {})
-                total_time = perf.get("total_wall_time_s", 0)
-                print(
-                    f"{label:<40} {scores.get('sync_composite', 0):>6.2f} "
-                    f"{scores.get('maintain_composite', 0):>6.2f} "
-                    f"{scores.get('overall_composite', 0):>7.2f} "
-                    f"{total_time:>6.0f}s"
-                )
-        elif pipeline == "extraction":
-            header = f"{'Config':<40} {'schema':>6} {'compl':>6} {'faith':>6} {'clar':>6} {'COMP':>6} {'time/t':>7}"
-            print(header)
-            print("-" * len(header))
-            for run in runs:
-                label = _model_label(run.get("config", {}))
-                scores = run.get("scores", {})
-                perf = run.get("performance", {})
-                avg_time = perf.get("avg_time_per_trace_s", 0)
-                print(
-                    f"{label:<40} {scores.get('schema_ok', 0):>6.2f} "
-                    f"{scores.get('completeness', 0):>6.2f} {scores.get('faithfulness', 0):>6.2f} "
-                    f"{scores.get('clarity', 0):>6.2f} {scores.get('composite', 0):>6.2f} "
-                    f"{avg_time:>6.1f}s"
-                )
-        else:
-            # Summarization or unknown
-            header = f"{'Config':<40} {'fields':>6} {'limits':>6} {'compl':>6} {'faith':>6} {'clar':>6} {'COMP':>6} {'time/t':>7}"
-            print(header)
-            print("-" * len(header))
-            for run in runs:
-                label = _model_label(run.get("config", {}))
-                scores = run.get("scores", {})
-                perf = run.get("performance", {})
-                avg_time = perf.get("avg_time_per_trace_s", 0)
-                print(
-                    f"{label:<40} {scores.get('fields_present', 0):>6.2f} "
-                    f"{scores.get('word_limits', 0):>6.2f} {scores.get('completeness', 0):>6.2f} "
-                    f"{scores.get('faithfulness', 0):>6.2f} {scores.get('clarity', 0):>6.2f} "
-                    f"{scores.get('composite', 0):>6.2f} {avg_time:>6.1f}s"
-                )
-
-        print()
+        print_compare_table(pipeline, runs)
 
 
 if __name__ == "__main__":

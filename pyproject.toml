@@ -23,6 +23,7 @@ dependencies = [
     "logfire[dspy]>=4.25.0",
     "vllm-mlx>=0.2.1",
     "litellm>=1.81.13",
+    "rich>=13.0",
 ]
 
 [project.urls]

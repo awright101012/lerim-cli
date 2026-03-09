@@ -23,6 +23,7 @@ model = "qwen3.5:4b-q8_0"
 thinking = false
 timeout_seconds = 2000
 max_workers = 1
+max_window_tokens=150000
 
 [summarization]
 provider = "ollama"
@@ -30,3 +31,4 @@ model = "qwen3.5:4b-q8_0"
 thinking = false
 timeout_seconds = 2000
 max_workers = 1
+max_window_tokens=150000
