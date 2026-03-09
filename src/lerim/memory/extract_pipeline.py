@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import dspy
+from dspy.adapters.baml_adapter import BAMLAdapter
 
 from lerim.config.logging import logger
 from lerim.config.settings import get_config
@@ -98,7 +99,7 @@ def _extract_candidates(
     all_candidates: list[dict[str, Any]] = []
     extractor = dspy.ChainOfThought(MemoryExtractSignature)
     history_start = len(lm.history)
-    with dspy.context(lm=lm):
+    with dspy.context(lm=lm, adapter=BAMLAdapter()):
         for wi, window in enumerate(windows, 1):
             logger.info("  Window {}/{}: extracting...", wi, len(windows))
             w_start = time.time()

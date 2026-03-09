@@ -23,6 +23,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import dspy
+from dspy.adapters.baml_adapter import BAMLAdapter
 import frontmatter
 from pydantic import BaseModel, Field
 
@@ -145,7 +146,7 @@ def _summarize_trace(
     history_start = len(lm.history)
     trace_tokens = estimate_tokens(transcript)
 
-    with dspy.context(lm=lm):
+    with dspy.context(lm=lm, adapter=BAMLAdapter()):
         if trace_tokens <= int(max_window_tokens * 0.85):
             # Fast path: single call — trace fits in context
             logger.info("Summarization: single call ({} est. tokens)", trace_tokens)

@@ -203,6 +203,7 @@ def _build_dspy_lm_for_provider(
             api_base=api_base or _default_api_base("ollama"),
             cache=False,
             max_tokens=32000,
+            response_format={"type": "json_object"},
         )
         if not thinking:
             kwargs["reasoning_effort"] = "none"
