@@ -1,6 +1,6 @@
-"""Extraction pipeline for session transcripts using ChainOfThought + windowing.
+"""Extraction pipeline for session transcripts using Predict + windowing.
 
-session file (.jsonl/.json) -> read text -> window (if needed) -> dspy.ChainOfThought
+session file (.jsonl/.json) -> read text -> window (if needed) -> dspy.Predict
 -> concat candidates from all windows.
 
 Traces are compacted by adapters (tool outputs stripped), so most traces fit in a
@@ -21,7 +21,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import dspy
-from dspy.adapters.baml_adapter import BAMLAdapter
+from dspy.adapters.xml_adapter import XMLAdapter
 
 from lerim.config.logging import logger
 from lerim.config.settings import get_config
@@ -55,8 +55,6 @@ class MemoryExtractSignature(dspy.Signature):
     transcript: str = dspy.InputField(
         desc="Raw session transcript text (JSONL or JSON, schema varies by agent)"
     )
-    metadata: dict[str, Any] = dspy.InputField(desc="Session metadata")
-    metrics: dict[str, Any] = dspy.InputField(desc="Deterministic metrics")
     guidance: str = dspy.InputField(
         desc="Optional lead-agent natural language guidance about focus areas, trace context, and dedupe hints"
     )
@@ -68,11 +66,9 @@ class MemoryExtractSignature(dspy.Signature):
 def _extract_candidates(
     transcript: str,
     *,
-    metadata: dict[str, Any] | None = None,
-    metrics: dict[str, Any] | None = None,
     guidance: str = "",
 ) -> list[dict[str, Any]]:
-    """Run ChainOfThought extraction with windowing and return normalized candidates.
+    """Run Predict extraction with windowing and return normalized candidates.
 
     Processes each window independently and concatenates all candidates.
     No merge or deduplication — maintain handles that downstream.
@@ -92,20 +88,16 @@ def _extract_candidates(
         max_window_tokens,
     )
     lm = configure_dspy_lm("extract")
-    meta = metadata or {}
-    met = metrics or {}
     guid = guidance.strip()
 
     all_candidates: list[dict[str, Any]] = []
-    extractor = dspy.ChainOfThought(MemoryExtractSignature)
+    extractor = dspy.Predict(MemoryExtractSignature)
     history_start = len(lm.history)
-    with dspy.context(lm=lm, adapter=BAMLAdapter()):
+    with dspy.context(lm=lm, adapter=XMLAdapter()):
         for wi, window in enumerate(windows, 1):
             logger.info("  Window {}/{}: extracting...", wi, len(windows))
             w_start = time.time()
-            result = extractor(
-                transcript=window, metadata=meta, metrics=met, guidance=guid
-            )
+            result = extractor(transcript=window, guidance=guid)
             primitives = getattr(result, "primitives", [])
             if isinstance(primitives, list):
                 for item in primitives:
@@ -129,8 +121,6 @@ def _extract_candidates(
 def extract_memories_from_session_file(
     session_file_path: Path,
     *,
-    metadata: dict[str, Any] | None = None,
-    metrics: dict[str, Any] | None = None,
     guidance: str = "",
 ) -> list[dict[str, Any]]:
     """Extract memory candidates from one on-disk session trace file."""
@@ -139,8 +129,6 @@ def extract_memories_from_session_file(
     transcript = session_file_path.read_text(encoding="utf-8")
     return _extract_candidates(
         transcript,
-        metadata=metadata,
-        metrics=metrics,
         guidance=guidance,
     )
 
@@ -187,18 +175,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="python -m lerim.memory.extract_pipeline")
     parser.add_argument("--trace-path")
     parser.add_argument("--output")
-    parser.add_argument("--metadata-json", default="{}")
-    parser.add_argument("--metrics-json", default="{}")
     parser.add_argument("--guidance", default="")
     args = parser.parse_args()
 
     if args.trace_path:
-        metadata = json.loads(args.metadata_json)
-        metrics = json.loads(args.metrics_json)
         payload = extract_memories_from_session_file(
             Path(args.trace_path).expanduser(),
-            metadata=metadata if isinstance(metadata, dict) else {},
-            metrics=metrics if isinstance(metrics, dict) else {},
             guidance=args.guidance,
         )
         encoded = json.dumps(payload, ensure_ascii=True, indent=2) + "\n"
@@ -228,8 +210,6 @@ if __name__ == "__main__":
             )
             candidates = extract_memories_from_session_file(
                 session_file_path,
-                metadata={"run_id": "self-test"},
-                metrics={},
             )
         assert candidates, "self-test failed: no candidates extracted"
 
