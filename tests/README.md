@@ -3,233 +3,54 @@
 ## Quick Reference
 
 ```bash
-# Unit tests (no LLM, no network, ~2s)
-tests/run_tests.sh unit
-
-# Smoke tests (requires LLM, parallel via pytest-xdist, ~40s)
-tests/run_tests.sh smoke
-
-# Integration tests (requires LLM, parallel via pytest-xdist, ~3 min)
-tests/run_tests.sh integration
-
-# E2E tests (requires LLM, parallel via pytest-xdist, ~5 min)
-tests/run_tests.sh e2e
-
-# All categories
-tests/run_tests.sh all
+tests/run_tests.sh unit          # No LLM, ~3s
+tests/run_tests.sh smoke         # Real LLM, ~1min
+tests/run_tests.sh integration   # Real LLM, ~5min
+tests/run_tests.sh e2e           # Real LLM, ~10min
+tests/run_tests.sh all           # All of the above + lint + quality
 ```
 
-The test runner auto-activates `.venv` if not already active and `cd`s to the project root.
-Override the test LLM provider/model via env vars `LERIM_TEST_PROVIDER` and `LERIM_TEST_MODEL`, or via `tests/test_config.toml`.
-Default models: `x-ai/grok-4.1-fast` (lead/explorer), `openai/gpt-5-nano` (extract/summarize), all via `openrouter`.
+Override the test LLM: `LERIM_TEST_PROVIDER=minimax LERIM_TEST_MODEL=MiniMax-M2.5 tests/run_tests.sh integration`
 
-## Directory Structure
+## Test Tiers
 
-```
-tests/
-  conftest.py              # Root: shared fixtures, marker registration
-  helpers.py               # make_config, run_cli, etc.
-  run_tests.sh             # Directory-based test selection
-  test_config.toml         # Default LLM config for smoke/integration/e2e
-  js_render_harness.js     # JavaScript rendering test
-  fixtures/                # Shared across tiers
-    traces/                # JSONL session traces
-    memories/              # Seeded memory files
-    cline/                 # Cline adapter test data
-  unit/                    # Flat, descriptive names. No LLM, <5s.
-    conftest.py            # autouse dummy API key
-  smoke/                   # Quick LLM sanity, requires LERIM_SMOKE=1
-    conftest.py            # Skip gate
-  integration/             # Real LLM, quality checks, requires LERIM_INTEGRATION=1
-    conftest.py            # Skip gate
-  e2e/                     # Full CLI flows, requires LERIM_E2E=1
-    conftest.py            # Skip gate
-```
+### Unit (`tests/unit/`, ~455 tests)
 
-Test selection is **directory-based**: `pytest tests/unit/` runs only unit tests. No `--ignore` flags or marker filtering needed.
+Fast, deterministic, no LLM, no network. Covers session adapters (Claude, Codex, Cursor, OpenCode), memory schemas and storage, config loading and merging, CLI parsing, dashboard helpers, runtime tool boundaries, provider construction, cost tracking, job queue, decay logic, and regression contracts for public API surfaces.
 
-## Test Categories
+### Smoke (`tests/smoke/`, ~5 tests)
 
-### Unit (`pytest tests/unit/`)
+Quick LLM sanity checks. Verifies the agent responds, extraction and summarization pipelines produce output, and DSPy LM configures correctly for each role. Gate: `LERIM_SMOKE=1`.
 
-Fast, deterministic tests with no LLM calls and no network. External state (config paths, DB paths) is monkeypatched to temp directories.
+### Integration (`tests/integration/`, ~61 tests)
 
-| File | What it tests |
-|------|---------------|
-| `test_adapter_common.py` | Shared adapter utilities: role normalization, timestamp parsing, metadata extraction |
-| `test_claude_adapter.py` | Claude JSONL trace parsing, session discovery, message extraction |
-| `test_codex_adapter.py` | Codex trace parsing and session metadata |
-| `test_opencode_adapter.py` | Opencode adapter parsing and JSONL export round-trip |
-| `test_cursor_adapter.py` | Cursor adapter parsing |
-| `test_adapter_registry.py` | Adapter loading, registration, connected-agent discovery |
-| `test_memory_record.py` | `MemoryRecord` construction, markdown serialization, frontmatter round-trips |
-| `test_memory_schemas.py` | Pydantic schema validation for memory primitives |
-| `test_summary_write.py` | Summary file writing to `memory/summaries/YYYYMMDD/HHMMSS/` layout |
-| `test_catalog_queries.py` | Session catalog DB: FTS indexing, job queue enqueue/claim/reclaim, pagination, service runs |
-| `test_fts.py` | Full-text search queries and ranking |
-| `test_config.py` | Settings loading, `_deep_merge`, `_to_int`/`_to_float` validators, role config building |
-| `test_settings.py` | Settings coverage gaps: `load_toml_file`, `_expand`, `_to_fallback_models`, `_parse_string_table`, `save_config_patch`, layer precedence |
-| `test_project_scope.py` | Project scope resolution (project-first vs global-only) |
-| `test_project_routing.py` | Per-project memory routing: `match_session_project`, `repo_path` on `SessionRecord`/`IndexedSession` |
-| `test_arg_utils.py` | `parse_duration_to_seconds`, CSV/tag parsing, CLI argument utilities |
-| `test_runtime_tools.py` | Tool boundary enforcement (read/write/glob/grep within allowed roots) |
-| `test_providers.py` | DSPy/PydanticAI LM provider construction, API key resolution |
-| `test_subagents.py` | Explorer subagent builder contracts, read-only tool verification |
-| `test_cli.py` | Argument parser validation, command routing, `memory list/add/search`, `--build` flag |
-| `test_docker_compose.py` | Docker compose generation: GHCR image, `--build` directive, secret leak prevention, version tag |
-| `test_dashboard_api.py` | `_compute_stats`, `_build_memory_graph_payload`, dashboard helper functions |
-| `test_regression_contracts.py` | Public API surface checks — import paths and function signatures haven't broken |
-| `test_runtime_agent_contract.py` | Lead agent contract (typed deps, typed outputs) |
-| `test_memory_layout.py` | Canonical memory directory structure |
-| `test_memory_search_toggles.py` | Search mode toggles (files/fts/vector/graph) |
-| `test_memory_decay.py` | Confidence decay and archive-threshold logic |
-| `test_memory_repo.py` | Memory path helpers: `build_memory_paths`, `ensure_memory_paths`, `reset_memory_root` |
-| `test_access_tracker.py` | Memory access tracking: `init_access_db`, `record_access`, `get_access_stats`, `is_body_read`, `extract_memory_id` |
-| `test_queue.py` | Queue facade verification: re-export completeness, identity with catalog originals |
-| `test_logging.py` | Logger configuration |
-| `test_tracing.py` | OpenTelemetry tracing configuration: service_name, instrument_pydantic_ai, instrument_dspy, instrument_httpx |
-| `test_skills.py` | Skill file discovery |
-| `test_indexer_platform_paths.py` | Platform path resolution for indexing |
-| `test_extract_lead_authority.py` | Lead agent is sole write authority |
-| `test_extract_parser_boundary.py` | Extraction parser boundary enforcement |
-| `test_session_extract_writeback.py` | Session extraction writeback to catalog |
-| `test_daemon_sync_maintain.py` | Daemon loop scheduling: independent sync/maintain intervals, config fields |
-| `test_maintain_command.py` | Maintain CLI command routing |
-| `test_cost_tracker.py` | Cost tracker accumulator, httpx response hook, DSPy history capture |
-| `test_learning_runs.py` | Learning run tracking |
-| `test_agent_memory_write_flow.py` | Agent memory write flow (unit-level) |
-| `test_dashboard_read_only_contract.py` | Dashboard endpoints are read-only |
-| `test_dashboard_visual_polish.py` | Dashboard HTML rendering |
-| `test_graph_explorer_frontend.py` | Graph explorer frontend rendering |
-| `test_index_html.py` | Dashboard index.html serving |
-| `test_trace_summarization_pipeline.py` | Trace summarization pipeline contracts |
-| `test_eval_scores.py` | Eval scoring utilities, schema checks, judge output parsing (incl. structured_output fix), prompt building |
-| `test_utils_windowing.py` | Transcript windowing: JSON ratio, oversized line splitting, prompt headroom, overlap carry |
+Real LLM calls testing pipeline quality and multi-component flows. Covers extraction output quality (schema conformance, primitive classification, minimum recall), summarization quality (field presence, word limits, tag relevance, agent detection), DSPy adapter parametrized tests (Chat/JSON/XML × Predict/ChainOfThought), eval runners, judge output parsing, provider fallback, and agent memory-write flows. Gate: `LERIM_INTEGRATION=1`. The 2 Claude CLI judge tests additionally require `LERIM_JUDGE=1`.
 
-### Smoke (`pytest tests/smoke/`)
+### E2E (`tests/e2e/`, ~8 tests)
 
-Quick LLM sanity checks. Skipped unless `LERIM_SMOKE=1` is set. Default models: `x-ai/grok-4.1-fast` (lead/explorer), `openai/gpt-5-nano` (extract/summarize).
+Full agent flows as a user would invoke them. Covers sync (trace → extract + summarize + memory write), sync idempotency (second run doesn't duplicate), maintain on seeded memory, full reset → sync → ask cycle, and ask end-to-end. Gate: `LERIM_E2E=1`.
 
-| File | What it tests |
-|------|---------------|
-| `test_pipelines.py` | DSPy LM configuration for extract/summarize roles; extraction and summarization pipelines produce output against fixture traces |
-| `test_agent.py` | PydanticAI agent returns a response for a simple question |
+## CI/CD
 
-### Integration (`pytest tests/integration/`)
-
-Multi-component flows with real LLM calls, real file I/O, and real DB writes. Skipped unless `LERIM_INTEGRATION=1` is set.
-
-| File | What it tests |
-|------|---------------|
-| `test_extract.py` | Feed fixture JSONL traces through DSPy extraction pipeline; verify valid `MemoryRecord` output |
-| `test_summarize.py` | Feed seeded memory directories through summarization pipeline; verify valid summary markdown files |
-| `test_agent.py` | Full PydanticAI agent ask with memory context |
-| `test_providers.py` | LM provider construction works with actual configured backend |
-| `test_memory_write.py` | Agent-driven memory write flows with real LLM |
-| `test_dspy_adapters.py` | Parametrized adapter tests (ChatAdapter/JSONAdapter/XMLAdapter x ChainOfThought/Predict x simple/long fixtures). Requires `LERIM_EVAL_OLLAMA=1` |
-| `test_judge.py` | Judge output parsing (unit-level: structured_output, result fallback, prose, code blocks) + end-to-end Claude CLI judge invocation. Requires `LERIM_JUDGE=1` for integration tests |
-| `test_eval_runners.py` | End-to-end eval runner flows (extraction + summarization) with judge scoring. Requires `LERIM_EVAL_OLLAMA=1` + `LERIM_JUDGE=1` for full tests |
-
-### E2E (`pytest tests/e2e/`)
-
-Full CLI command flows as a user would invoke them. Skipped unless `LERIM_E2E=1` is set.
-
-| File | What it tests |
-|------|---------------|
-| `test_sync.py` | `lerim sync` against fixture traces creates memories; re-running is idempotent |
-| `test_maintain.py` | `lerim maintain` on seeded memories performs maintenance actions |
-| `test_full_cycle.py` | Full lifecycle: reset -> sync -> ask |
-| `test_real.py` | `LerimAgent.ask()` returns a response from a real LLM; extract pipeline with mocked DSPy |
-| `test_context_layers.py` | Context layer resolution end-to-end |
-| `test_memory_write_modes.py` | Agent memory write modes end-to-end |
-
-## Regression / Contract Tests
-
-Regression tests live in unit-land (no LLM needed) but pin down public API surfaces. If a field is added or removed from a Pydantic model, or a CLI subcommand is renamed, these tests fail.
-
-`test_regression_contracts.py` checks:
-- **`SyncResultContract`** — exact field set
-- **`MaintainResultContract`** — exact field set
-- **`MemoryCandidate`** — required fields
-- **CLI subcommands** — all present
-- **`MEMORY_FRONTMATTER_SCHEMA`** — expected keys per type
-
-## Fixture Dataset
-
-Hand-crafted fixture files live in `tests/fixtures/`. These are NOT auto-generated — they are minimal, deterministic inputs designed for specific test scenarios.
-
-### Trace fixtures (`fixtures/traces/`)
-
-| File | Lines | Format | Purpose |
-|------|-------|--------|---------|
-| `claude_simple.jsonl` | 6 | Claude | JWT auth decision + CORS learning; primary happy-path trace |
-| `claude_long_multitopic.jsonl` | ~20 | Claude | Long multi-topic session; tests windowed extraction |
-| `codex_simple.jsonl` | varies | Codex | Codex adapter parsing verification |
-| `codex_with_tools.jsonl` | varies | Codex | Codex trace with tool calls; tests tool-call extraction |
-| `debug_session.jsonl` | ~10 | Generic | Debugging session; tests friction/pitfall extraction |
-| `mixed_decisions_learnings.jsonl` | 8 | Generic | Multiple decisions AND learnings in one trace |
-| `edge_short.jsonl` | 2 | Generic | Minimal conversation; edge case for very short input |
-| `edge_empty.jsonl` | 2 | Generic | Empty user content; edge case for noise/empty input handling |
-
-### Memory fixtures (`fixtures/memories/`)
-
-| File | Primitive | Purpose |
-|------|-----------|---------|
-| `decision_auth_pattern.md` | decision | JWT/HS256 auth decision with full frontmatter |
-| `learning_queue_fix.md` | learning | Atomic queue operations learning |
-| `learning_stale.md` | learning | Old (2025), low-confidence (0.3) record; tests archival/decay |
-| `learning_duplicate_a.md` | learning | Near-duplicate A; tests deduplication |
-| `learning_duplicate_b.md` | learning | Near-duplicate B; tests deduplication |
-
-## Shared Infrastructure
-
-### `conftest.py` (root)
-
-Shared pytest fixtures available to all test tiers:
-- **`tmp_lerim_root`** — Temporary directory with canonical Lerim folder structure
-- **`tmp_config`** — `Config` object pointing at `tmp_lerim_root`
-- **`seeded_memory`** — `tmp_lerim_root` with fixture memory files
-- **`skip_unless_env(var)`** — Marker helper
-- **LLM config auto-apply** — Detects smoke/integration/e2e tests and sets `LERIM_CONFIG`
-
-### Tier-specific `conftest.py`
-
-- **`unit/conftest.py`** — Autouse dummy API key for PydanticAI constructors
-- **`smoke/conftest.py`** — Skip all unless `LERIM_SMOKE=1`
-- **`integration/conftest.py`** — Skip all unless `LERIM_INTEGRATION=1`
-- **`e2e/conftest.py`** — Skip all unless `LERIM_E2E=1`
-
-### `helpers.py`
-
-- **`make_config(base)`** — Builds a deterministic `Config` rooted at a given path
-- **`write_test_config(tmp_path, **sections)`** — Writes a TOML config file for CLI integration tests
-- **`run_cli(args)`** — Runs a CLI command in-process, returns `(exit_code, stdout)`
-- **`run_cli_json(args)`** — Runs a CLI command and parses stdout as JSON
+Only **unit tests + lint** run in GitHub Actions (`.github/workflows/ci.yml`). No LLM calls, no API keys needed. Smoke, integration, and e2e are local-only since they require real API keys.
 
 ## Environment Variables
 
-| Variable | Required for | Default |
-|----------|-------------|---------|
-| `LERIM_SMOKE=1` | Smoke tests | See `tests/test_config.toml` |
-| `LERIM_INTEGRATION=1` | Integration tests | See `tests/test_config.toml` |
-| `LERIM_E2E=1` | E2E tests | See `tests/test_config.toml` |
-| `LERIM_EVAL_OLLAMA=1` | DSPy adapter tests + eval pipeline tests | Requires Ollama running with `qwen3.5:4b-q8_0` |
-| `LERIM_JUDGE=1` | Judge integration tests | Requires Claude CLI installed |
-| `LERIM_EVAL_MODEL` | Override Ollama model for adapter tests | `qwen3.5:4b-q8_0` |
-| `LERIM_EVAL_OLLAMA_BASE` | Override Ollama API base URL | `http://127.0.0.1:11434` |
-| `LERIM_TEST_PROVIDER` | Override provider | `openrouter` |
-| `LERIM_TEST_MODEL` | Override model | `x-ai/grok-4.1-fast` (lead/explorer) |
-| `LERIM_CONFIG` | Override config path | `tests/test_config.toml` (auto-applied by conftest) |
+| Variable | Purpose |
+|----------|---------|
+| `LERIM_TEST_PROVIDER` | Override LLM provider for all test roles |
+| `LERIM_TEST_MODEL` | Override LLM model for all test roles |
+| `LERIM_SMOKE=1` | Enable smoke tests |
+| `LERIM_INTEGRATION=1` | Enable integration tests |
+| `LERIM_E2E=1` | Enable e2e tests |
+| `LERIM_JUDGE=1` | Enable Claude CLI judge integration tests |
 
 ## Adding New Tests
 
-- Place unit tests in `tests/unit/test_<name>.py` — no marker needed.
-- For smoke/integration/e2e, place in the appropriate directory with the `pytestmark` marker.
-- Add new fixture files to `tests/fixtures/` as needed.
-- Each test file must have a docstring at the top explaining what it tests.
-- Each test function should test ONE thing.
-- Update this README when adding new test files or changing test infrastructure.
+- Unit tests go in `tests/unit/test_<name>.py` — no marker needed, always run.
+- Smoke/integration/e2e go in the appropriate directory — the conftest skip gate handles gating.
+- Each test file needs a docstring explaining what it tests.
 
 ## DSPy Thread Safety
 
-PydanticAI dispatches tool functions to worker threads. DSPy's `dspy.configure(lm=lm)` is **not thread-safe**. The pipelines use `dspy.context(lm=lm)` (thread-local context manager) instead. See `extract_pipeline.py` and `summarization_pipeline.py`.
+Pipelines use `dspy.context(lm=lm)` (thread-local) instead of `dspy.configure()` (global). See `call_with_fallback` in `memory/utils.py`.
