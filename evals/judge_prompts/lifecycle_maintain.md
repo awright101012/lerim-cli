@@ -30,11 +30,4 @@ Use your Read and search tools to investigate the files above. Do NOT load entir
 
 Return ONLY valid JSON (no markdown fences, no extra text):
 
-```json
-{
-  "completeness": 0.0,
-  "faithfulness": 0.0,
-  "coherence": 0.0,
-  "reasoning": "Brief explanation of scores."
-}
-```
+{"completeness": 0.0, "faithfulness": 0.0, "coherence": 0.0, "reasoning": "Brief explanation of scores."}

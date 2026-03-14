@@ -2,8 +2,9 @@
 
 Supports claude, codex, and opencode as judge agents. Reads prompt templates
 from judge_prompts/ and injects trace path + pipeline output. Uses structured
-output flags (--json-schema for claude, --output-schema for codex) and retries
-on JSON parse failure.
+output flags (--json-schema for claude, --output-schema + -o for codex) and
+embeds schema instructions in prompt for opencode. Validates parsed results
+against schema and retries on parse/validation failures.
 """
 
 from __future__ import annotations
@@ -85,13 +86,14 @@ def _run_with_heartbeat(
 
 def _build_cmd(
     agent: str, prompt: str, model: str | None, schema: dict | None
-) -> tuple[list[str], Path | None]:
-    """Build CLI command and optional temp schema file.
+) -> tuple[list[str], Path | None, Path | None]:
+    """Build CLI command and optional temp files.
 
-    Returns (cmd, temp_schema_path). Caller must delete temp_schema_path
-    if not None.
+    Returns (cmd, temp_schema_path, temp_output_path). Caller must delete
+    temp files if not None.
     """
-    temp_schema_path = None
+    temp_schema_path: Path | None = None
+    temp_output_path: Path | None = None
 
     if agent == "claude":
         cmd = [
@@ -107,30 +109,47 @@ def _build_cmd(
             cmd.extend(["--model", model])
         if schema:
             cmd.extend(["--json-schema", json.dumps(schema)])
+
     elif agent == "codex":
-        cmd = ["codex", "exec", prompt, "--json", "--ephemeral"]
+        cmd = ["codex", "exec", prompt, "--full-auto", "--ephemeral"]
         if model:
             cmd.extend(["--model", model])
         if schema:
-            f = tempfile.NamedTemporaryFile(
+            sf = tempfile.NamedTemporaryFile(
                 mode="w",
                 suffix=".json",
                 prefix="judge_schema_",
                 delete=False,
             )
-            json.dump(schema, f)
-            f.close()
-            temp_schema_path = Path(f.name)
+            json.dump(schema, sf)
+            sf.close()
+            temp_schema_path = Path(sf.name)
             cmd.extend(["--output-schema", str(temp_schema_path)])
+            # Capture final structured answer to a file instead of JSONL stdout
+            of = tempfile.NamedTemporaryFile(
+                suffix=".json",
+                prefix="judge_output_",
+                delete=False,
+            )
+            of.close()
+            temp_output_path = Path(of.name)
+            cmd.extend(["-o", str(temp_output_path)])
+
     elif agent == "opencode":
+        # Embed schema in prompt since opencode has no schema enforcement flag
+        if schema:
+            prompt += (
+                "\n\nIMPORTANT: You MUST respond with ONLY a JSON object matching "
+                "this exact schema, no other text:\n" + json.dumps(schema, indent=2)
+            )
         cmd = ["opencode", "run", prompt, "--format", "json"]
         if model:
             cmd.extend(["--model", model])
-        # opencode has no structured output flag
+
     else:
         raise ValueError(f"Unknown judge agent: {agent}")
 
-    return cmd, temp_schema_path
+    return cmd, temp_schema_path, temp_output_path
 
 
 def invoke_judge(
@@ -142,26 +161,41 @@ def invoke_judge(
 ) -> dict:
     """Invoke a coding agent CLI as judge, return parsed JSON.
 
-    Retries up to MAX_RETRIES times on JSON parse failures. Uses structured
-    output flags when available (--json-schema for claude, --output-schema
-    for codex).
+    Retries up to MAX_RETRIES times on JSON parse or validation failures.
+    Uses structured output flags when available (--json-schema for claude,
+    --output-schema + -o for codex). For opencode, embeds schema in prompt.
     """
     if schema is None:
         schema = JUDGE_SCHEMA_CLARITY
 
-    last_error = None
+    last_error: RuntimeError | None = None
     for attempt in range(1, MAX_RETRIES + 1):
-        cmd, temp_schema_path = _build_cmd(agent, prompt, model, schema)
+        cmd, temp_schema_path, temp_output_path = _build_cmd(
+            agent, prompt, model, schema
+        )
         try:
             result = _run_with_heartbeat(cmd, timeout)
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"Judge {agent} failed (rc={result.returncode}): {result.stderr[:500]}"
+                    f"Judge {agent} failed (rc={result.returncode}): "
+                    f"{result.stderr[:500]}"
                 )
-            return _parse_agent_output(agent, result.stdout)
+            # For codex -o flag, prefer the output file over JSONL stdout
+            if (
+                temp_output_path
+                and temp_output_path.exists()
+                and temp_output_path.stat().st_size > 0
+            ):
+                raw = temp_output_path.read_text(encoding="utf-8")
+            else:
+                raw = result.stdout
+            parsed = _parse_agent_output(agent, raw)
+            _validate_judge_result(parsed, schema)
+            return parsed
         except RuntimeError as e:
             last_error = e
-            if "Could not parse JSON" in str(e) and attempt < MAX_RETRIES:
+            retryable = "Could not parse JSON" in str(e) or "Judge result" in str(e)
+            if retryable and attempt < MAX_RETRIES:
                 logger.warning(
                     "Judge parse error (attempt {}/{}), retrying: {}",
                     attempt,
@@ -173,14 +207,38 @@ def invoke_judge(
         finally:
             if temp_schema_path and temp_schema_path.exists():
                 temp_schema_path.unlink()
+            if temp_output_path and temp_output_path.exists():
+                temp_output_path.unlink()
 
     raise last_error  # type: ignore[misc]
 
 
+def _extract_opencode_response(raw: str) -> str:
+    """Extract final assistant response from opencode JSONL event stream.
+
+    Scans lines in reverse to find the last event containing text content,
+    which should be the final assistant response.
+    """
+    for line in reversed(raw.strip().splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                continue
+            for key in ("content", "text", "message", "result", "output"):
+                val = event.get(key)
+                if isinstance(val, str) and len(val.strip()) > 2:
+                    return val
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return raw
+
+
 def _parse_agent_output(agent: str, raw: str) -> dict:
     """Parse structured JSON output from coding agent CLI."""
-    # For claude --output-format json, structured data is in 'structured_output'
-    # field (when --json-schema is used), while 'result' contains prose text.
+    # Claude --output-format json wraps in {"result": ..., "structured_output": ...}
     if agent == "claude":
         try:
             wrapper = json.loads(raw)
@@ -194,6 +252,9 @@ def _parse_agent_output(agent: str, raw: str) -> dict:
                 text = raw
         except (json.JSONDecodeError, TypeError):
             text = raw
+    elif agent == "opencode":
+        # --format json emits JSONL events; extract assistant response text
+        text = _extract_opencode_response(raw)
     else:
         text = raw
 
@@ -214,6 +275,32 @@ def _parse_agent_output(agent: str, raw: str) -> dict:
             pass
 
     raise RuntimeError(f"Could not parse JSON from {agent} output: {text[:300]}")
+
+
+def _validate_judge_result(result: dict, schema: dict | None) -> None:
+    """Validate parsed judge result has required keys with correct types."""
+    if not schema:
+        return
+    required = schema.get("required", [])
+    properties = schema.get("properties", {})
+    missing = [k for k in required if k not in result]
+    if missing:
+        raise RuntimeError(
+            f"Judge result missing required keys: {missing} "
+            f"(got: {list(result.keys())})"
+        )
+    type_map: dict[str, tuple[type, ...]] = {
+        "number": (int, float),
+        "string": (str,),
+    }
+    for key in required:
+        expected = properties.get(key, {}).get("type")
+        allowed = type_map.get(expected)  # type: ignore[arg-type]
+        if allowed and not isinstance(result[key], allowed):
+            raise RuntimeError(
+                f"Judge result key '{key}' expected {expected}, "
+                f"got {type(result[key]).__name__}: {result[key]!r}"
+            )
 
 
 def build_judge_prompt(
@@ -260,6 +347,51 @@ if __name__ == "__main__":
     md = 'Some text\n```json\n{"clarity": 0.7}\n```\nmore text'
     assert _parse_agent_output("codex", md) == {"clarity": 0.7}
 
+    # Test _extract_opencode_response with JSONL events
+    events = (
+        '{"type": "status", "status": "running"}\n'
+        '{"type": "message", "content": "Let me analyze..."}\n'
+        '{"type": "message", "content": "{\\"completeness\\": 0.9, '
+        '\\"faithfulness\\": 0.8, \\"clarity\\": 0.7, '
+        '\\"reasoning\\": \\"Good extraction.\\"}"}\n'
+    )
+    extracted = _extract_opencode_response(events)
+    parsed = json.loads(extracted)
+    assert parsed["completeness"] == 0.9
+
+    # Test _parse_agent_output for opencode with JSONL events
+    result = _parse_agent_output("opencode", events)
+    assert result["completeness"] == 0.9
+
+    # Test _validate_judge_result with valid result
+    valid = {
+        "completeness": 0.9,
+        "faithfulness": 0.8,
+        "clarity": 0.7,
+        "reasoning": "test",
+    }
+    _validate_judge_result(valid, JUDGE_SCHEMA_CLARITY)  # should not raise
+
+    # Test _validate_judge_result with missing key
+    try:
+        _validate_judge_result({"completeness": 0.9}, JUDGE_SCHEMA_CLARITY)
+        assert False, "Should have raised"
+    except RuntimeError as e:
+        assert "missing required keys" in str(e)
+
+    # Test _validate_judge_result with wrong type
+    try:
+        bad = {
+            "completeness": "high",
+            "faithfulness": 0.8,
+            "clarity": 0.7,
+            "reasoning": "test",
+        }
+        _validate_judge_result(bad, JUDGE_SCHEMA_CLARITY)
+        assert False, "Should have raised"
+    except RuntimeError as e:
+        assert "expected number" in str(e)
+
     # Test build_judge_prompt
     import tempfile as _tmp
 
@@ -273,15 +405,35 @@ if __name__ == "__main__":
         assert '{"data": 1}' in prompt
 
     # Test _build_cmd with schema for claude
-    cmd, tmp = _build_cmd("claude", "test prompt", None, JUDGE_SCHEMA_CLARITY)
+    cmd, schema_tmp, output_tmp = _build_cmd(
+        "claude", "test prompt", None, JUDGE_SCHEMA_CLARITY
+    )
     assert "--json-schema" in cmd
-    assert tmp is None
+    assert schema_tmp is None
+    assert output_tmp is None
 
-    # Test _build_cmd with schema for codex
-    cmd, tmp = _build_cmd("codex", "test prompt", None, JUDGE_SCHEMA_CLARITY)
+    # Test _build_cmd with schema for codex (--full-auto, --output-schema, -o, no --json)
+    cmd, schema_tmp, output_tmp = _build_cmd(
+        "codex", "test prompt", None, JUDGE_SCHEMA_CLARITY
+    )
     assert "--output-schema" in cmd
-    assert tmp is not None
-    tmp.unlink()
+    assert "-o" in cmd
+    assert "--full-auto" in cmd
+    assert "--json" not in cmd
+    assert schema_tmp is not None
+    assert output_tmp is not None
+    schema_tmp.unlink()
+    output_tmp.unlink()
+
+    # Test _build_cmd for opencode embeds schema in prompt
+    cmd, schema_tmp, output_tmp = _build_cmd(
+        "opencode", "test prompt", None, JUDGE_SCHEMA_CLARITY
+    )
+    assert schema_tmp is None
+    assert output_tmp is None
+    prompt_in_cmd = cmd[2]  # opencode run <prompt>
+    assert "MUST respond with ONLY a JSON object" in prompt_in_cmd
+    assert '"completeness"' in prompt_in_cmd
 
     # Test schema constants have right keys
     assert set(JUDGE_SCHEMA_CLARITY["required"]) == {

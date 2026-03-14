@@ -162,12 +162,12 @@ def _build_sync_judge_prompt(
 ) -> str:
     """Build judge prompt for a sync evaluation."""
     template = SYNC_JUDGE_PROMPT.read_text(encoding="utf-8")
-    return template.format(
-        trace_path=trace_path,
-        agent_trace_path=agent_trace_path,
-        memory_root=memory_root,
-        run_folder=run_folder,
-        memory_count=memory_count,
+    return (
+        template.replace("{trace_path}", str(trace_path))
+        .replace("{agent_trace_path}", str(agent_trace_path))
+        .replace("{memory_root}", str(memory_root))
+        .replace("{run_folder}", str(run_folder))
+        .replace("{memory_count}", str(memory_count))
     )
 
 
@@ -180,12 +180,12 @@ def _build_maintain_judge_prompt(
 ) -> str:
     """Build judge prompt for a maintain evaluation."""
     template = MAINTAIN_JUDGE_PROMPT.read_text(encoding="utf-8")
-    return template.format(
-        agent_trace_path=agent_trace_path,
-        memory_root=memory_root,
-        run_folder=run_folder,
-        before_count=before_count,
-        after_count=after_count,
+    return (
+        template.replace("{agent_trace_path}", str(agent_trace_path))
+        .replace("{memory_root}", str(memory_root))
+        .replace("{run_folder}", str(run_folder))
+        .replace("{before_count}", str(before_count))
+        .replace("{after_count}", str(after_count))
     )
 
 

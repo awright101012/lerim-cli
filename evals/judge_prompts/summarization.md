@@ -20,13 +20,6 @@ You are evaluating the quality of session trace summarization from a coding-agen
 
 ## Response Format
 
-Return exactly this JSON structure:
+Return exactly this JSON structure (no markdown fences, no extra text):
 
-```json
-{
-  "completeness": 0.0,
-  "faithfulness": 0.0,
-  "clarity": 0.0,
-  "reasoning": "Brief explanation of scores."
-}
-```
+{"completeness": 0.0, "faithfulness": 0.0, "clarity": 0.0, "reasoning": "Brief explanation of scores."}
