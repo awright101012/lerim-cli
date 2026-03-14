@@ -1,6 +1,6 @@
 # Quickstart
 
-Get Lerim running in under 5 minutes — from installation to your first memory query.
+Get Lerim running in under 5 minutes — from installation to your first knowledge query.
 
 ## Prerequisites
 
@@ -85,7 +85,7 @@ lerim init
 
 This will:
 
-- Detect your installed coding agents (Claude Code, Codex, Cursor, OpenCode)
+- Detect your installed coding agents
 - Ask which agents you want to connect
 - Write the config to `~/.lerim/config.toml`
 - Check for Docker availability
@@ -211,7 +211,7 @@ Install the Lerim skill so your coding agent knows how to query past context:
 lerim skill install
 ```
 
-This copies SKILL.md and the CLI reference into your agent's skill directory. Supported agents: Claude Code, Codex, Cursor, OpenCode.
+This copies SKILL.md and the CLI reference into your agent's skill directory.
 
 At the start of a coding session, tell your agent:
 
@@ -275,11 +275,11 @@ lerim sync --agent claude
 
 ## What's happening in the background?
 
-1. **Session indexing** — Lerim watches your agent session stores (e.g., `~/.claude/projects/`, `~/Library/Application Support/Cursor/User/globalStorage/`)
+1. **Session indexing** — Lerim watches your agent session stores for new traces
 2. **Extraction** — When new sessions are detected, Lerim extracts decision and learning candidates using DSPy pipelines
-3. **Deduplication** — Candidates are compared against existing memories to avoid duplicates
-4. **Storage** — New memories are written as markdown files to `.lerim/memory/` (project scope)
-5. **Refinement** — The maintain loop periodically merges duplicates, archives low-value entries, and applies time decay
+3. **Deduplication** — Candidates are compared against existing knowledge to avoid duplicates
+4. **Storage** — New entries are written as markdown files to `.lerim/memory/` (project scope)
+5. **Refinement** — The maintain loop periodically merges duplicates, archives low-value entries, and applies time decay to keep the context graph clean
 
 ## Next steps
 

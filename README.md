@@ -2,7 +2,7 @@
   <img src="assets/lerim.png" alt="Lerim Logo" width="160">
 </p>
 
-<h3 align="center">Your coding agents forget everything after each session.<br>Lerim remembers — across all of them.</h3>
+<h3 align="center">Your coding agents forget everything after each session.<br>Lerim learns — across all of them.</h3>
 
 <p align="center">
   <a href="https://pypi.org/project/lerim/"><img src="https://img.shields.io/pypi/v/lerim?style=flat-square&color=blue" alt="PyPI version"></a>
@@ -18,24 +18,27 @@
 
 > You spend 20 minutes explaining context to your coding agent. It writes great code. Next session? It's forgotten everything. Every decision, every pattern, every "we tried X and it didn't work" -- gone.
 
-> And if you use multiple agents -- Claude Code at the terminal, Cursor in the IDE, Codex for reviews -- none of them know what the others learned. Your project knowledge is **scattered across isolated sessions with no shared memory**.
+> And if you use multiple agents -- Claude Code at the terminal, Cursor in the IDE, Codex for reviews -- none of them know what the others learned. Your project knowledge is **scattered across isolated sessions with no shared intelligence**.
 
 > This is **agent context amnesia**, and it's the biggest productivity drain in AI-assisted development.
 
 ## The Solution
 
-Lerim is a **continual learning layer** that gives coding agents persistent, shared memory across sessions and platforms. Use Claude Code, Cursor, Codex, and OpenCode on the same project — Lerim unifies their knowledge into one memory store that every agent can query.
+Lerim is the **continual learning and context graph layer** for AI coding agents — it watches sessions, extracts structured knowledge, and builds a shared intelligence graph across agents, projects, and teams.
 
-- **Watches** your agent sessions across Claude Code, Codex CLI, Cursor, and OpenCode
-- **Extracts** decisions and learnings automatically using LLM pipelines
+- **Watches** your agent sessions across all supported coding agents
+- **Extracts** decisions and learnings automatically using LLM pipelines (DSPy + PydanticAI)
 - **Stores** everything as plain markdown files in your repo (`.lerim/`)
-- **Refines** memories continuously -- merges duplicates, archives stale entries, applies time-based decay
-- **Unifies** knowledge across all your agents -- what Cursor learns, Claude Code can recall
+- **Refines** knowledge continuously -- merges duplicates, archives stale entries, applies time-based decay
+- **Connects** learnings into a context graph -- related decisions and patterns are linked
+- **Unifies** knowledge across all your agents -- what one agent learns, every other can recall
 - **Answers** questions about past context: `lerim ask "why did we choose Postgres?"`
 
-No proprietary format. No database lock-in. Just markdown files that both humans and agents can read. Memories get smarter over time, not stale.
+No proprietary format. No database lock-in. Just markdown files that both humans and agents can read. Knowledge compounds over time, not stale.
 
 ## Supported Agents
+
+Lerim works with any coding agent that produces session traces. Current adapters:
 
 | Agent | Session Format | Status |
 |-------|---------------|--------|
@@ -44,7 +47,7 @@ No proprietary format. No database lock-in. Just markdown files that both humans
 | Cursor | SQLite to JSONL | Supported |
 | OpenCode | SQLite to JSONL | Supported |
 
-*More agents coming soon -- PRs welcome!*
+*Adding a new agent adapter is straightforward -- PRs welcome! See `src/lerim/adapters/` for examples.*
 
 ## How It Works
 
@@ -63,7 +66,7 @@ Lerim is file-first and primitive-first.
   <img src="assets/sync.png" alt="Sync path" width="700">
 </p>
 
-The sync path processes new agent sessions: reads transcript archives, extracts decision and learning candidates via DSPy, deduplicates against existing memories, and writes new primitives to the memory folder.
+The sync path processes new agent sessions: reads transcript archives, extracts decision and learning candidates via DSPy, deduplicates against existing knowledge, and writes new entries to the project's knowledge store.
 
 ### Maintain path
 
@@ -71,7 +74,7 @@ The sync path processes new agent sessions: reads transcript archives, extracts 
   <img src="assets/maintain.png" alt="Maintain path" width="700">
 </p>
 
-The maintain path runs offline refinement over stored memories: merges duplicates, archives low-value entries, consolidates related memories, and applies time-based decay to keep the memory store clean and relevant.
+The maintain path runs offline refinement over stored knowledge: merges duplicates, archives low-value entries, consolidates related learnings, and applies time-based decay to keep the context graph clean and relevant.
 
 ## Quick start
 
@@ -118,7 +121,7 @@ Install the Lerim skill so your agent knows how to query past context:
 lerim skill install
 ```
 
-This copies skill files (SKILL.md, cli-reference.md) into your agent's skill directory. Supported agents: Claude Code, Codex, Cursor, OpenCode.
+This copies skill files (SKILL.md, cli-reference.md) into your agent's skill directory.
 
 ### 6. Get the most out of Lerim
 
@@ -149,7 +152,7 @@ For Docker deployments, set `ollama = "http://host.docker.internal:11434"` in `[
 
 ## Dashboard
 
-The dashboard gives you a local UI for session analytics, memory browsing, and runtime status.
+The dashboard gives you a local UI for session analytics, knowledge browsing, and runtime status.
 
 <p align="center">
   <img src="assets/dashboard.png" alt="Lerim dashboard" width="1100">
@@ -294,6 +297,6 @@ Full documentation: [docs.lerim.dev](https://docs.lerim.dev)
 ---
 
 <p align="center">
-  <strong>If lerim saves you from re-explaining context to your agent, give it a ⭐</strong><br>
+  <strong>If Lerim saves you from re-explaining context to your agent, give it a ⭐</strong><br>
   <a href="https://github.com/lerim-dev/lerim-cli">Star on GitHub</a>
 </p>

@@ -1,6 +1,6 @@
 # How It Works
 
-Lerim is a **continual learning layer** for coding agents. It watches your agent sessions, extracts decisions and learnings, and stores them as plain markdown files that any agent can query.
+Lerim is the **continual learning and context graph layer** for AI coding agents. It watches your agent sessions, extracts decisions and learnings, connects them into a structured context graph, and makes that intelligence available to every agent on every session.
 
 This page explains the architecture, data flow, deployment model, and security boundaries.
 
@@ -34,7 +34,7 @@ Lerim is built around four core principles:
 
     ---
 
-    Works with Claude Code, Codex CLI, Cursor, and OpenCode. Platform adapters normalize different session formats into a common pipeline.
+    Works with any coding agent that produces session traces. Platform adapters normalize different session formats into a common pipeline. New agents are added via the adapter protocol.
 
 </div>
 
@@ -46,7 +46,7 @@ Lerim has two runtime paths that work together: **sync** (hot path) and **mainta
 
 ```mermaid
 flowchart TD
-    A["Agent sessions\n(Claude Code, Codex, Cursor, OpenCode)"] --> B["Adapters\n(normalize to SessionRecord)"]
+    A["Agent sessions\n(any supported coding agent)"] --> B["Adapters\n(normalize to SessionRecord)"]
     B --> C["Session catalog\n(index + job queue)"]
     C --> D["Sync path\n(extract memories)"]
     D --> E["Project memory\n(.lerim/memory/)"]
@@ -59,7 +59,7 @@ flowchart TD
 
 ## Sync path
 
-The sync path processes new agent sessions: reads transcript archives, extracts decision and learning candidates via DSPy, deduplicates against existing memories, and writes new primitives to the memory folder.
+The sync path processes new agent sessions: reads transcript archives, extracts decision and learning candidates via DSPy, deduplicates against existing knowledge, and writes new entries to the project's knowledge store.
 
 ![Sync path](../assets/sync.png)
 
@@ -80,7 +80,7 @@ The sync path processes new agent sessions: reads transcript archives, extracts 
 
 ## Maintain path
 
-The maintain path runs offline refinement over stored memories: merges duplicates, archives low-value entries, consolidates related memories, and applies time-based decay.
+The maintain path runs offline refinement over stored knowledge: merges duplicates, archives low-value entries, consolidates related learnings, and applies time-based decay to keep the context graph clean.
 
 ![Maintain path](../assets/maintain.png)
 

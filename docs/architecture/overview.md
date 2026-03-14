@@ -1,7 +1,7 @@
 # System Architecture
 
-Lerim is a file-first continual learning layer for coding agents. This page
-describes the system design, components, and runtime boundaries.
+Lerim is the file-first continual learning and context graph layer for AI coding
+agents. This page describes the system design, components, and runtime boundaries.
 
 ## Design principles
 
@@ -46,9 +46,9 @@ describes the system design, components, and runtime boundaries.
 | **Extract pipeline** | DSPy ChainOfThought | Extracts decision/learning candidates from session transcripts |
 | **Summarize pipeline** | DSPy ChainOfThought | Generates structured session summaries |
 | **Session catalog** | SQLite | Indexes sessions, FTS, job queue, service run log |
-| **Adapters** | Python | Platform-specific session readers (Claude, Codex, Cursor, OpenCode) |
+| **Adapters** | Python | Platform-specific session readers (extensible via adapter protocol) |
 | **HTTP API** | Starlette | JSON API for CLI, skills, agents, and dashboard UI |
-| **Dashboard** | HTML/JS | Local UI for session analytics, memory browsing, pipeline status |
+| **Dashboard** | HTML/JS | Local UI for session analytics, knowledge browsing, pipeline status |
 | **Ollama lifecycle** | httpx | Loads/unloads local models before and after each sync/maintain cycle to free GPU/RAM |
 
 ## Deployment model
@@ -79,7 +79,7 @@ lerim up/down     (host only)
 
 ```mermaid
 flowchart TD
-    A["Adapters\n(claude / codex / cursor / opencode)"] --> B["Session Catalog\n+ Queue"]
+    A["Adapters\n(extensible per-agent)"] --> B["Session Catalog\n+ Queue"]
     B --> C["Lead Agent\n(PydanticAI)"]
     C --> D["Workspace Artifacts\n(.lerim/workspace/run_id/)"]
     D --> E["extract.json + summary.json\n+ memory_actions.json"]

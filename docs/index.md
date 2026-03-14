@@ -8,13 +8,13 @@ hide:
 
 # Lerim
 
-**Your coding agents forget everything after each session. Lerim remembers — across all of them.**
+**Your coding agents forget everything after each session. Lerim learns — across all of them.**
 
 <p align="center">
   <img src="assets/lerim.png" alt="Lerim Logo" width="160">
 </p>
 
-Lerim is a **continual learning layer** that gives coding agents persistent, shared memory across sessions and platforms. Use Claude Code, Cursor, Codex, and OpenCode on the same project — Lerim unifies their knowledge into one memory store that every agent can query.
+Lerim is the **continual learning and context graph layer** for AI coding agents — it watches sessions, extracts structured knowledge, and builds a shared intelligence graph across agents, projects, and teams.
 
 <p align="center">
   <img src="assets/agent-network.gif" alt="Lerim network animation" width="450">
@@ -28,7 +28,7 @@ Lerim is a **continual learning layer** that gives coding agents persistent, sha
 
 You spend 20 minutes explaining context to your coding agent. It writes great code. Next session? It's forgotten everything. Every decision, every pattern, every "we tried X and it didn't work" — gone.
 
-And if you use multiple agents — Claude Code at the terminal, Cursor in the IDE, Codex for reviews — none of them know what the others learned. Your project knowledge is **scattered across isolated sessions with no shared memory**.
+And if you use multiple agents — Claude Code at the terminal, Cursor in the IDE, Codex for reviews — none of them know what the others learned. Your project knowledge is **scattered across isolated sessions with no shared intelligence**.
 
 This is **agent context amnesia**, and it's the biggest productivity drain in AI-assisted development.
 
@@ -36,11 +36,12 @@ This is **agent context amnesia**, and it's the biggest productivity drain in AI
 
 Lerim solves this by:
 
-- :material-sync: **Watching** your agent sessions across Claude Code, Codex CLI, Cursor, and OpenCode
-- :material-brain: **Extracting** decisions and learnings automatically using LLM pipelines
+- :material-sync: **Watching** your agent sessions across all supported coding agents
+- :material-brain: **Extracting** decisions and learnings automatically using LLM pipelines (DSPy + PydanticAI)
 - :material-file-document: **Storing** everything as plain markdown files in your repo (`.lerim/`)
-- :material-refresh: **Refining** memories continuously — merges duplicates, archives stale entries, applies time-based decay
-- :material-share-variant: **Unifying** knowledge across all your agents — what Cursor learns, Claude Code can recall
+- :material-refresh: **Refining** knowledge continuously — merges duplicates, archives stale entries, applies time-based decay
+- :material-graph: **Connecting** learnings into a context graph — related decisions and patterns are linked
+- :material-share-variant: **Unifying** knowledge across all your agents — what one agent learns, every other can recall
 - :material-chat-question: **Answering** questions about past context: `lerim ask "why did we choose Postgres?"`
 
 No proprietary format. No database lock-in. Just markdown files that both humans and agents can read.
@@ -95,7 +96,7 @@ No proprietary format. No database lock-in. Just markdown files that both humans
 
 #### :material-account-group: Multi-agent support
 
-Works with Claude Code, Cursor, Codex CLI, and OpenCode
+Works with any coding agent that produces session traces
 
 </div>
 
@@ -165,7 +166,7 @@ Runs entirely on your machine with Docker or standalone
 
 ### Connect your agents
 
-Link your coding agent platforms. Lerim auto-detects Claude Code, Codex, Cursor, and OpenCode.
+Link your coding agent platforms. Lerim auto-detects supported agents on your system.
 
 ```bash
 lerim init
@@ -188,9 +189,9 @@ Lerim reads session transcripts, extracts decisions and learnings via DSPy pipel
 
 <div class="step" markdown>
 
-### Maintain memories
+### Maintain knowledge
 
-Offline refinement merges duplicates, archives low-value entries, consolidates related memories, and applies time-based decay.
+Offline refinement merges duplicates, archives low-value entries, consolidates related learnings, and applies time-based decay.
 
 <p align="center">
   <img src="assets/maintain.png" alt="Maintain path diagram" width="700">
@@ -217,7 +218,7 @@ lerim memory search "authentication"
 
 ## Dashboard
 
-Lerim includes a local web UI for session analytics, memory browsing, and runtime status.
+Lerim includes a local web UI for session analytics, knowledge browsing, and runtime status.
 
 <p align="center">
   <img src="assets/dashboard.png" alt="Lerim dashboard" width="1100">

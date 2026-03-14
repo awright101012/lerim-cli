@@ -1,10 +1,10 @@
 # Supported Agents
 
-Lerim ingests session transcripts from your coding agents to extract decisions and learnings. Each agent stores sessions in a different format and location — Lerim's adapter system normalizes them all into a common pipeline.
+Lerim works with any coding agent that produces session traces. Each agent stores sessions in a different format and location — Lerim's adapter system normalizes them all into a common pipeline. Adding support for a new agent is straightforward via the adapter protocol.
 
 ---
 
-## Supported platforms
+## Current adapters
 
 | Agent | Session format | Default session path | Notes |
 |-------|---------------|---------------------|-------|
@@ -14,6 +14,8 @@ Lerim ingests session transcripts from your coding agents to extract decisions a
 | **OpenCode** | SQLite → JSONL | `~/.local/share/opencode/` | SQLite `opencode.db` exported to JSONL cache |
 
 Claude Code and Codex CLI store sessions as JSONL files that Lerim reads directly. Cursor and OpenCode use SQLite databases — Lerim exports their data to a JSONL cache for uniform processing.
+
+More adapters are added over time. Any coding agent that produces session traces can be supported — see below for how to add one.
 
 ---
 
