@@ -23,6 +23,7 @@ sync_interval_minutes = 10          # sync hot path interval
 maintain_interval_minutes = 60      # maintain cold path interval
 sync_window_days = 7
 sync_max_sessions = 50
+parallel_pipelines = true               # run extract + summarize in the same tool turn (set false for local/Ollama models)
 
 [roles.lead]
 provider = "minimax"                   # minimax | zai | openrouter | openai
@@ -67,7 +68,6 @@ max_window_tokens = 300000
 window_overlap_tokens = 5000
 openrouter_provider_order = []
 thinking = true
-max_workers = 4                        # parallel window processing (set 1 for local/Ollama models)
 
 [providers]
 # Default API base URLs per provider.

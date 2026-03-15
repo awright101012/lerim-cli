@@ -90,6 +90,7 @@ def _make_ollama_config(
         ),
         sync_window_days=7,
         sync_max_sessions=50,
+        parallel_pipelines=True,
         tracing_enabled=False,
         tracing_include_httpx=False,
         tracing_include_content=True,

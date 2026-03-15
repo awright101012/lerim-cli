@@ -266,6 +266,7 @@ class Config:
     maintain_interval_minutes: int
     sync_window_days: int
     sync_max_sessions: int
+    parallel_pipelines: bool
 
     lead_role: LLMRoleConfig
     explorer_role: LLMRoleConfig
@@ -380,6 +381,7 @@ class Config:
                     self.summarize_role.openrouter_provider_order
                 ),
             },
+            "parallel_pipelines": self.parallel_pipelines,
             "decay_enabled": self.decay_enabled,
             "decay_days": self.decay_days,
             "decay_min_confidence_floor": self.decay_min_confidence_floor,
@@ -608,6 +610,7 @@ def load_config() -> Config:
         ),
         sync_window_days=_require_int(server, "sync_window_days", minimum=1),
         sync_max_sessions=_require_int(server, "sync_max_sessions", minimum=1),
+        parallel_pipelines=bool(server.get("parallel_pipelines", True)),
         lead_role=lead_role,
         explorer_role=explorer_role,
         extract_role=extract_role,
@@ -830,6 +833,7 @@ def build_eval_config(
         ),
         sync_window_days=_require_int(server, "sync_window_days", minimum=1),
         sync_max_sessions=_require_int(server, "sync_max_sessions", minimum=1),
+        parallel_pipelines=bool(server.get("parallel_pipelines", True)),
         lead_role=lead_role,
         explorer_role=explorer_role,
         extract_role=extract_role,

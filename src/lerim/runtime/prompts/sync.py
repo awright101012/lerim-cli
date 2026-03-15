@@ -14,11 +14,43 @@ def build_sync_prompt(
     run_folder: Path,
     artifact_paths: dict[str, Path],
     metadata: dict[str, str],
+    parallel_pipelines: bool = True,
+    max_explorers: int = 4,
 ) -> str:
-    """Build lead-agent prompt for the memory write flow."""
+    """Build lead-agent prompt for the memory write flow.
+
+    Prompt text adapts to parallelism config:
+    - parallel_pipelines: extract + summarize in same turn vs separate turns.
+    - max_explorers: batch N explore calls vs one per turn.
+    """
     artifact_json = json.dumps(
         {key: str(path) for key, path in artifact_paths.items()}, ensure_ascii=True
     )
+
+    # Step 1: extract + summarize — parallel or sequential
+    if parallel_pipelines:
+        step1 = """\
+1. EXTRACT + SUMMARIZE (one turn, parallel):
+   Call extract_pipeline() and summarize_pipeline() together in the SAME tool-call turn.
+   Paths, metadata, and output locations are handled automatically. Only pass optional guidance."""
+    else:
+        step1 = """\
+1. EXTRACT then SUMMARIZE (two turns, sequential):
+   First call extract_pipeline(). After it completes, call summarize_pipeline() in the next turn.
+   Paths, metadata, and output locations are handled automatically. Only pass optional guidance."""
+
+    # Step 3: explore — parallel or single
+    if max_explorers > 1:
+        step3 = f"""\
+3. EXPLORE (one turn, parallel):
+   Call up to {max_explorers} explore() calls in the SAME turn for candidate matching.
+   Explorer subagent is read-only. If 0 candidates, skip to step 5."""
+    else:
+        step3 = """\
+3. EXPLORE (one call per turn):
+   Call one explore() call per turn for candidate matching.
+   Explorer subagent is read-only. If 0 candidates, skip to step 5."""
+
     return f"""\
 Run the Lerim agent-led memory write flow.
 
@@ -30,16 +62,12 @@ Inputs:
 
 Steps (minimize tool turns — batch parallel calls aggressively):
 
-1. EXTRACT + SUMMARIZE (one turn, parallel):
-   Call extract_pipeline() and summarize_pipeline() together in the SAME tool-call turn.
-   Paths, metadata, and output locations are handled automatically. Only pass optional guidance.
+{step1}
 
 2. READ EXTRACT RESULTS (one turn):
    Read extract.json from artifact paths.
 
-3. EXPLORE (one turn, parallel):
-   Call up to 4 explore() calls in the SAME turn for candidate matching.
-   Explorer subagent is read-only. If 0 candidates, skip to step 5.
+{step3}
 
 4. WRITE MEMORIES (one turn, parallel):
    Call ALL write_memory() calls in the SAME turn for every add/update candidate.
@@ -78,6 +106,7 @@ if __name__ == "__main__":
             "subagents_log": run_folder / "subagents.log",
             "session_log": run_folder / "session.log",
         }
+        # Test parallel mode (default)
         prompt = build_sync_prompt(
             trace_file=trace_file,
             memory_root=root / "memory",
@@ -92,3 +121,21 @@ if __name__ == "__main__":
         assert "artifact_paths_json" in prompt
         assert "extract_pipeline" in prompt
         assert "Do NOT write summary files yourself" in prompt
+        assert "SAME tool-call turn" in prompt  # parallel pipelines
+
+        # Test sequential mode
+        prompt_seq = build_sync_prompt(
+            trace_file=trace_file,
+            memory_root=root / "memory",
+            run_folder=run_folder,
+            artifact_paths=artifact_paths,
+            metadata={
+                "run_id": "sync-selftest",
+                "trace_path": str(trace_file),
+                "repo_name": "lerim",
+            },
+            parallel_pipelines=False,
+            max_explorers=1,
+        )
+        assert "two turns, sequential" in prompt_seq
+        assert "one explore() call per turn" in prompt_seq

@@ -296,13 +296,18 @@ Always use tools to read/write files and produce concise completion output."""
         if "explore" in allowed_tools:
 
             @agent.tool
-            def explore(
+            async def explore(
                 ctx: RunContext[RuntimeToolContext],
                 query: str,
             ) -> str:
-                """Delegate read-only evidence gathering to explorer subagent. Runs sequentially to avoid concurrent requests to local LLM servers."""
+                """Delegate read-only evidence gathering to explorer subagent.
+
+                Async tool: PydanticAI dispatches multiple async tools via
+                asyncio.create_task, enabling true concurrent explorer calls
+                when the LLM batches them in one turn.
+                """
                 try:
-                    result = get_explorer_agent().run_sync(query, deps=ctx.deps)
+                    result = await get_explorer_agent().run(query, deps=ctx.deps)
                     return str(result.output or "")
                 except Exception as exc:
                     from lerim.config.logging import logger
@@ -534,6 +539,8 @@ Always use tools to read/write files and produce concise completion output."""
             run_folder=run_folder,
             artifact_paths=artifact_paths,
             metadata=metadata,
+            parallel_pipelines=self.config.parallel_pipelines,
+            max_explorers=self.config.explorer_role.max_explorers,
         )
         extra_roots = list(self._allowed_read_dirs) + [trace_file.parent]
         context = build_tool_context(
@@ -652,6 +659,7 @@ Always use tools to read/write files and produce concise completion output."""
             decay_archive_threshold=self.config.decay_archive_threshold,
             decay_min_confidence_floor=self.config.decay_min_confidence_floor,
             decay_recent_access_grace_days=self.config.decay_recent_access_grace_days,
+            max_explorers=self.config.explorer_role.max_explorers,
         )
         context = build_tool_context(
             repo_root=repo_root,

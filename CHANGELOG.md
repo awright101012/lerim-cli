@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.66] - 2026-03-15
+
+### Added
+
+- **Parallelism support**: three config knobs control concurrent execution:
+  - `max_workers` in `[roles.extract]`: parallel extraction window processing via ThreadPoolExecutor (each thread gets its own DSPy LM instances for thread safety).
+  - `max_explorers` in `[roles.explorer]`: concurrent explorer subagent calls per lead turn.
+  - `parallel_pipelines` in `[server]`: run extract + summarize pipelines in the same tool turn.
+- **Async explore tool**: explorer subagent changed from sync (`run_sync`) to async (`await agent.run`), enabling true concurrent dispatch via PydanticAI's `asyncio.create_task`.
+- **Adaptive prompts**: sync and maintain prompts now emit parallel or sequential instructions based on config values. Set knobs to `1`/`false` for local models.
+
+### Removed
+
+- `max_workers` from `[roles.summarize]` — summarization uses sequential refine/fold, so window parallelism does not apply.
+
 ## [0.1.60] - 2026-03-05
 
 ### Added

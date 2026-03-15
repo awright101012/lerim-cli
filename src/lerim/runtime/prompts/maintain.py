@@ -58,8 +58,13 @@ def build_maintain_prompt(
     decay_archive_threshold: float = 0.2,
     decay_min_confidence_floor: float = 0.1,
     decay_recent_access_grace_days: int = 30,
+    max_explorers: int = 4,
 ) -> str:
-    """Build lead-agent prompt for the memory maintenance flow."""
+    """Build lead-agent prompt for the memory maintenance flow.
+
+    Prompt text adapts to max_explorers: batch N explore calls per turn
+    vs one per turn.
+    """
     artifact_json = json.dumps(
         {key: str(path) for key, path in artifact_paths.items()}, ensure_ascii=True
     )
@@ -70,6 +75,13 @@ def build_maintain_prompt(
         decay_min_confidence_floor,
         decay_recent_access_grace_days,
     )
+
+    # Explore parallelism instruction
+    if max_explorers > 1:
+        explore_hint = f"You can call up to {max_explorers} explore() calls in the SAME tool-call turn for parallel execution when you have independent queries."
+    else:
+        explore_hint = "Call one explore() call per turn."
+
     return f"""\
 You are running Lerim memory maintenance — an offline refinement pass over existing memories.
 This mimics how human memory works: consolidate, strengthen important memories, forget noise.
@@ -90,7 +102,7 @@ Checklist:
 
 Instructions:
 
-1. SCAN: Use explore, read, glob, grep tools to inspect all memory files in {memory_root}/decisions/ and {memory_root}/learnings/. Parse frontmatter (id, title, confidence, tags, created, updated) and body content. You can call up to 4 explore() calls in the SAME tool-call turn for parallel execution when you have independent queries.
+1. SCAN: Use explore, read, glob, grep tools to inspect all memory files in {memory_root}/decisions/ and {memory_root}/learnings/. Parse frontmatter (id, title, confidence, tags, created, updated) and body content. {explore_hint}
    IMPORTANT: Process memories in chronological order (oldest "created" date first). Later memories may update or supersede earlier ones, so always resolve conflicts in favor of the newer memory.
 
 2. ANALYZE DUPLICATES: Identify memories that cover the same topic or have substantially overlapping content. Group them by similarity.
@@ -188,4 +200,16 @@ if __name__ == "__main__":
         assert "DECAY POLICY" in prompt_with_stats
         assert "effective_confidence" in prompt_with_stats
         assert "decayed" in prompt_with_stats
+
+        # Test sequential explore mode
+        prompt_seq = build_maintain_prompt(
+            memory_root=root / "memory",
+            run_folder=run_folder,
+            artifact_paths=artifact_paths,
+            max_explorers=1,
+        )
+        assert "one explore() call per turn" in prompt_seq
+
+        # Test parallel explore mode (default)
+        assert "SAME tool-call turn" in prompt
         print("maintain prompt: all self-tests passed")

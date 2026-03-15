@@ -6,6 +6,9 @@ session file (.jsonl/.json) -> read text -> window (if needed) -> dspy.Predict
 Traces are compacted by adapters (tool outputs stripped), so most traces fit in a
 single window. Windowing is a fallback for unusually large sessions. No merge or
 deduplication — the downstream maintain path handles that.
+
+When max_workers > 1, windows are processed in parallel via ThreadPoolExecutor.
+Each thread gets its own DSPy LM instances for thread safety.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import json
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -63,6 +67,42 @@ class MemoryExtractSignature(dspy.Signature):
     )
 
 
+def _extract_one_window(
+    wi: int,
+    total: int,
+    window: str,
+    guidance: str,
+) -> list[dict[str, Any]]:
+    """Extract candidates from a single window with its own LM instances.
+
+    Each call creates fresh DSPy LM instances so parallel threads never
+    share mutable history state.
+    """
+    lms = configure_dspy_lms("extract")
+    extractor = dspy.Predict(MemoryExtractSignature)
+    history_start = len(lms[0].history)
+    logger.info("  Window {}/{}: extracting...", wi, total)
+    w_start = time.time()
+    _, result = call_with_fallback(extractor, lms, transcript=window, guidance=guidance)
+    candidates: list[dict[str, Any]] = []
+    primitives = getattr(result, "primitives", [])
+    if isinstance(primitives, list):
+        for item in primitives:
+            if isinstance(item, MemoryCandidate):
+                candidates.append(item.model_dump(mode="json", exclude_none=True))
+            elif isinstance(item, dict):
+                candidates.append(item)
+    logger.info(
+        "  Window {}/{}: done ({:.1f}s, {} candidates)",
+        wi,
+        total,
+        time.time() - w_start,
+        len(primitives) if isinstance(primitives, list) else 0,
+    )
+    capture_dspy_cost(lms[0], history_start)
+    return candidates
+
+
 def _extract_candidates(
     transcript: str,
     *,
@@ -70,7 +110,8 @@ def _extract_candidates(
 ) -> list[dict[str, Any]]:
     """Run Predict extraction with windowing and return normalized candidates.
 
-    Processes each window independently and concatenates all candidates.
+    When max_workers > 1 and multiple windows exist, processes windows in
+    parallel via ThreadPoolExecutor. Otherwise falls back to sequential.
     No merge or deduplication — maintain handles that downstream.
     """
     if not transcript.strip():
@@ -78,44 +119,38 @@ def _extract_candidates(
     config = get_config()
     max_window_tokens = config.extract_role.max_window_tokens
     overlap_tokens = config.extract_role.window_overlap_tokens
+    max_workers = config.extract_role.max_workers
     if "\n{" in transcript:
         windows = window_transcript_jsonl(transcript, max_window_tokens, overlap_tokens)
     else:
         windows = window_transcript(transcript, max_window_tokens, overlap_tokens)
     logger.info(
-        "Extraction: {} window(s), max_window_tokens={}",
+        "Extraction: {} window(s), max_window_tokens={}, max_workers={}",
         len(windows),
         max_window_tokens,
+        max_workers,
     )
-    lms = configure_dspy_lms("extract")
     guid = guidance.strip()
+    total = len(windows)
 
-    all_candidates: list[dict[str, Any]] = []
-    extractor = dspy.Predict(MemoryExtractSignature)
-    history_start = len(lms[0].history)
+    if max_workers > 1 and total > 1:
+        # Parallel: each thread gets its own LM instances via _extract_one_window
+        effective_workers = min(max_workers, total)
+        logger.info("Extraction: parallel mode ({} workers)", effective_workers)
+        all_candidates: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+            futures = {
+                pool.submit(_extract_one_window, wi, total, window, guid): wi
+                for wi, window in enumerate(windows, 1)
+            }
+            for future in as_completed(futures):
+                all_candidates.extend(future.result())
+        return all_candidates
+
+    # Sequential: single-thread path (max_workers=1 or single window)
+    all_candidates = []
     for wi, window in enumerate(windows, 1):
-        logger.info("  Window {}/{}: extracting...", wi, len(windows))
-        w_start = time.time()
-        used_lm, result = call_with_fallback(
-            extractor, lms, transcript=window, guidance=guid
-        )
-        primitives = getattr(result, "primitives", [])
-        if isinstance(primitives, list):
-            for item in primitives:
-                if isinstance(item, MemoryCandidate):
-                    all_candidates.append(
-                        item.model_dump(mode="json", exclude_none=True)
-                    )
-                elif isinstance(item, dict):
-                    all_candidates.append(item)
-        logger.info(
-            "  Window {}/{}: done ({:.1f}s, {} candidates)",
-            wi,
-            len(windows),
-            time.time() - w_start,
-            len(primitives) if isinstance(primitives, list) else 0,
-        )
-    capture_dspy_cost(lms[0], history_start)
+        all_candidates.extend(_extract_one_window(wi, total, window, guid))
     return all_candidates
 
 
