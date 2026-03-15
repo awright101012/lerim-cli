@@ -2,7 +2,7 @@
   <img src="assets/lerim.png" alt="Lerim Logo" width="160">
 </p>
 
-<h3 align="center">Your coding agents forget everything after each session.<br>Lerim learns — across all of them.</h3>
+<h3 align="center">You shouldn't have to repeat yourself every session, to every agent.<br>Lerim makes your decisions, patterns, and context persist across all of them.</h3>
 
 <p align="center">
   <a href="https://pypi.org/project/lerim/"><img src="https://img.shields.io/pypi/v/lerim?style=flat-square&color=blue" alt="PyPI version"></a>
