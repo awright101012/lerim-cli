@@ -42,6 +42,7 @@ class LLMRoleConfig:
     max_iterations: int
     openrouter_provider_order: tuple[str, ...]
     thinking: bool = True
+    max_tokens: int = 32000
     max_explorers: int = 4
 
 
@@ -58,6 +59,7 @@ class DSPyRoleConfig:
     openrouter_provider_order: tuple[str, ...]
     fallback_models: tuple[str, ...] = ()
     thinking: bool = True
+    max_tokens: int = 32000
     max_workers: int = 4
 
 
@@ -424,6 +426,7 @@ def _build_llm_role(
             raw.get("openrouter_provider_order")
         ),
         thinking=bool(raw.get("thinking", True)),
+        max_tokens=int(raw.get("max_tokens", 32000)),
         max_explorers=int(raw.get("max_explorers", 4)),
     )
 
@@ -446,6 +449,7 @@ def _build_dspy_role(
             raw.get("openrouter_provider_order")
         ),
         thinking=bool(raw.get("thinking", True)),
+        max_tokens=int(raw.get("max_tokens", 32000)),
         max_workers=int(raw.get("max_workers", 4)),
     )
 

@@ -195,6 +195,7 @@ def _build_dspy_lm_for_provider(
     role_label: str,
     openrouter_provider_order: tuple[str, ...] = (),
     thinking: bool = True,
+    max_tokens: int = 32000,
 ) -> dspy.LM:
     """Build a single DSPy LM object from provider/model/api_base."""
     if provider == "ollama":
@@ -202,7 +203,7 @@ def _build_dspy_lm_for_provider(
             api_key="ollama",
             api_base=api_base or _default_api_base("ollama"),
             cache=False,
-            max_tokens=32000,
+            max_tokens=max_tokens,
         )
         if not thinking:
             kwargs["reasoning_effort"] = "none"
@@ -213,7 +214,7 @@ def _build_dspy_lm_for_provider(
             api_key="mlx",
             api_base=api_base or _default_api_base("mlx"),
             cache=False,
-            max_tokens=32000,
+            max_tokens=max_tokens,
         )
     if provider == "openrouter":
         api_key = _api_key_for_provider(cfg, "openrouter")
@@ -229,7 +230,7 @@ def _build_dspy_lm_for_provider(
             api_key=api_key,
             api_base=api_base or _default_api_base("openrouter"),
             cache=False,
-            max_tokens=32000,
+            max_tokens=max_tokens,
             extra_body=extra_body,
         )
     if provider in {"zai", "openai", "minimax"}:
@@ -246,7 +247,7 @@ def _build_dspy_lm_for_provider(
             api_key=api_key,
             api_base=api_base or _default_api_base(provider),
             cache=False,
-            max_tokens=32000,
+            max_tokens=max_tokens,
         )
     raise RuntimeError(f"unsupported_dspy_provider:{provider}")
 
@@ -271,6 +272,7 @@ def build_dspy_lm(
         role_label=f"roles.{role}.provider={role_cfg.provider}",
         openrouter_provider_order=role_cfg.openrouter_provider_order,
         thinking=role_cfg.thinking,
+        max_tokens=role_cfg.max_tokens,
     )
 
 
@@ -291,6 +293,7 @@ def build_dspy_fallback_lms(
             cfg=cfg,
             role_label=f"roles.{role}.fallback={spec.provider}:{spec.model}",
             thinking=role_cfg.thinking,
+            max_tokens=role_cfg.max_tokens,
         )
         for spec in specs
     ]

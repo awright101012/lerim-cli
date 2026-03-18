@@ -34,6 +34,7 @@ timeout_seconds = 300
 max_iterations = 10
 openrouter_provider_order = []
 thinking = true                        # enable model thinking/reasoning (Ollama Qwen 3.5)
+max_tokens = 32000                     # max output tokens for LLM responses (lower for OpenAI models, e.g. 16384)
 
 [roles.explorer]
 provider = "minimax"
@@ -44,6 +45,7 @@ timeout_seconds = 180
 max_iterations = 8
 openrouter_provider_order = []
 thinking = true
+max_tokens = 32000                     # max output tokens for LLM responses (lower for OpenAI models, e.g. 16384)
 max_explorers = 4                     # max parallel explorer subagents per lead turn (set 1 for local/Ollama models)
 
 [roles.extract]
@@ -56,6 +58,7 @@ max_window_tokens = 300000
 window_overlap_tokens = 5000
 openrouter_provider_order = []
 thinking = true
+max_tokens = 32000                     # max output tokens for LLM responses (lower for OpenAI models, e.g. 16384)
 max_workers = 4                        # parallel window processing (set 1 for local/Ollama models)
 
 [roles.summarize]
@@ -68,6 +71,7 @@ max_window_tokens = 300000
 window_overlap_tokens = 5000
 openrouter_provider_order = []
 thinking = true
+max_tokens = 32000                     # max output tokens for LLM responses (lower for OpenAI models, e.g. 16384)
 
 [providers]
 # Default API base URLs per provider.
