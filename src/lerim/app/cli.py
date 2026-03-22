@@ -2,7 +2,7 @@
 
 Service commands (ask, sync, maintain, status) are thin HTTP clients that
 talk to a running Lerim server (started via ``lerim up`` or ``lerim serve``).
-Host-only commands (init, project, up, down, logs, connect, memory, daemon)
+Host-only commands (init, project, up, down, logs, connect, memory)
 run locally and never require an HTTP server.
 """
 
@@ -41,8 +41,6 @@ from lerim.app.api import (
 )
 from lerim.app.arg_utils import parse_csv
 from lerim.app.daemon import (
-    run_daemon_forever,
-    run_daemon_once,
     run_maintain_once,
     run_sync_once,
     resolve_window_bounds,
@@ -229,19 +227,6 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
     if data is None:
         return _not_running()
     _emit_structured(title="Maintain:", payload=data, as_json=args.json)
-    return 0
-
-
-def _cmd_daemon(args: argparse.Namespace) -> int:
-    """Handle daemon commands for one-shot or continuous execution."""
-    max_sessions = getattr(args, "max_sessions", None)
-    if args.once:
-        payload = run_daemon_once(max_sessions=max_sessions)
-        _emit_structured(
-            title="Daemon once result:", payload=payload, as_json=args.json
-        )
-        return 0
-    run_daemon_forever(poll_seconds=args.poll_seconds)
     return 0
 
 
@@ -756,6 +741,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
                     logger.warning("daemon maintain error: {}", exc)
                 last_maintain = time.monotonic()
 
+            # Ship to cloud (best-effort)
+            if config.cloud_token:
+                try:
+                    from lerim.app.cloud_shipper import ship_once
+                    import asyncio
+                    results = asyncio.run(ship_once(config))
+                    if results:
+                        logger.info("cloud sync: {}", results)
+                except Exception as exc:
+                    logger.warning("cloud sync error: {}", exc)
+
             next_sync = last_sync + sync_interval
             next_maintain = last_maintain + maintain_interval
             sleep_for = max(1.0, min(next_sync, next_maintain) - time.monotonic())
@@ -995,38 +991,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview mode: record a run but skip all actual memory changes.",
     )
     maintain.set_defaults(func=_cmd_maintain)
-
-    # ── daemon ───────────────────────────────────────────────────────
-    daemon = sub.add_parser(
-        "daemon",
-        formatter_class=_F,
-        help="Run recurring sync + maintain loop",
-        description=(
-            "Runs a continuous loop: sync (index + extract) then maintain (refine),\n"
-            "repeating at a configurable interval. Use --once for a single cycle.\n\n"
-            "Examples:\n"
-            "  lerim daemon                  # run forever with default poll interval\n"
-            "  lerim daemon --once           # run one sync+maintain cycle and exit\n"
-            "  lerim daemon --poll-seconds 120  # poll every 2 minutes"
-        ),
-    )
-    daemon.add_argument(
-        "--once",
-        action="store_true",
-        help="Run exactly one sync+maintain cycle and exit (instead of looping forever).",
-    )
-    daemon.add_argument(
-        "--max-sessions",
-        type=int,
-        default=None,
-        help="Max sessions to extract per cycle. (default: sync_max_sessions from config)",
-    )
-    daemon.add_argument(
-        "--poll-seconds",
-        type=int,
-        help="Override both sync and maintain intervals uniformly (seconds). Minimum 30s.",
-    )
-    daemon.set_defaults(func=_cmd_daemon)
 
     # ── dashboard ────────────────────────────────────────────────────
     dashboard = sub.add_parser(
