@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -769,6 +770,18 @@ def run_daemon_forever(poll_seconds: int | None = None) -> None:
             except Exception as exc:
                 logger.warning("daemon maintain error: {}", exc)
             last_maintain = time.monotonic()
+
+        # Ship local data to cloud after sync/maintain (best-effort).
+        config = get_config()
+        if config.cloud_token:
+            try:
+                from lerim.app.cloud_shipper import ship_once
+
+                results = asyncio.run(ship_once(config))
+                if results:
+                    logger.info("cloud sync: {}", results)
+            except Exception as exc:
+                logger.warning("cloud sync error: {}", exc)
 
         # Sleep until the next task is due.
         next_sync = last_sync + sync_interval
