@@ -530,18 +530,137 @@ def _cmd_down(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_since(since: str) -> float:
+    """Parse a relative duration string (e.g. ``1h``, ``30m``, ``2d``) into seconds."""
+    import re
+
+    m = re.fullmatch(r"(\d+)\s*([smhd])", since.strip().lower())
+    if not m:
+        raise ValueError(f"Invalid --since format: {since!r}  (expected e.g. 1h, 30m, 2d)")
+    value, unit = int(m.group(1)), m.group(2)
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return value * multipliers[unit]
+
+
+def _fmt_log_line(entry: dict[str, Any], *, color: bool) -> str:
+    """Format a parsed JSONL log entry for terminal display."""
+    ts_raw = str(entry.get("ts") or "")
+    # Extract HH:MM:SS from ISO-8601 timestamp
+    hms = ts_raw[11:19] if len(ts_raw) >= 19 else ts_raw
+    level = str(entry.get("level") or "").upper()
+    message = str(entry.get("message") or "")
+
+    if not color:
+        return f"{hms} | {level:<8} | {message}"
+
+    # ANSI colour codes for log levels
+    _LEVEL_COLORS: dict[str, str] = {
+        "TRACE": "\033[37m",     # white/grey
+        "DEBUG": "\033[36m",     # cyan
+        "INFO": "\033[32m",      # green
+        "SUCCESS": "\033[1;32m", # bold green
+        "WARNING": "\033[33m",   # yellow
+        "ERROR": "\033[31m",     # red
+        "CRITICAL": "\033[1;31m",  # bold red
+    }
+    _RESET = "\033[0m"
+    clr = _LEVEL_COLORS.get(level, "")
+    return f"\033[32m{hms}\033[0m | {clr}{level:<8}{_RESET} | {clr}{message}{_RESET}"
+
+
 def _cmd_logs(args: argparse.Namespace) -> int:
-    """Tail Docker container logs."""
-    if not COMPOSE_PATH.exists():
-        _emit("No compose file found. Run `lerim up` first.", file=sys.stderr)
+    """Read and display local JSONL log entries from ``~/.lerim/logs/lerim.jsonl``."""
+    from lerim.config.logging import LOG_DIR
+
+    jsonl_path = LOG_DIR / "lerim.jsonl"
+
+    if not jsonl_path.exists():
+        _emit("No log file found. Logs will appear after Lerim runs.", file=sys.stderr)
         return 1
-    cmd = ["docker", "compose", "-f", str(COMPOSE_PATH), "logs"]
-    if args.follow:
-        cmd.append("--follow")
+
+    is_tty = sys.stdout.isatty()
+    raw_json = getattr(args, "raw_json", False) or getattr(args, "json", False)
+    level_filter = (getattr(args, "level", None) or "").upper() or None
+    since_str = getattr(args, "since", None)
+    follow = getattr(args, "follow", False)
+
+    # Compute cutoff timestamp for --since
+    cutoff_ts: float | None = None
+    if since_str:
+        import datetime as _dt
+
+        cutoff_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=_parse_since(since_str))).timestamp()
+
+    def _matches(entry: dict[str, Any]) -> bool:
+        """Return True if the entry passes level and time filters."""
+        if level_filter and str(entry.get("level") or "").upper() != level_filter:
+            return False
+        if cutoff_ts is not None:
+            from datetime import datetime, timezone
+
+            ts_raw = str(entry.get("ts") or "")
+            try:
+                entry_dt = datetime.fromisoformat(ts_raw)
+                if entry_dt.tzinfo is None:
+                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                if entry_dt.timestamp() < cutoff_ts:
+                    return False
+            except (ValueError, TypeError):
+                return False
+        return True
+
+    def _print_entry(entry: dict[str, Any]) -> None:
+        if raw_json:
+            _emit(json.dumps(entry, ensure_ascii=True, default=str))
+        else:
+            _emit(_fmt_log_line(entry, color=is_tty))
+
+    if follow:
+        # Live tail: seek to end, then poll for new lines
+        try:
+            with open(jsonl_path, "r", encoding="utf-8") as fh:
+                fh.seek(0, 2)  # seek to end
+                while True:
+                    line = fh.readline()
+                    if not line:
+                        time.sleep(0.25)
+                        continue
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if _matches(entry):
+                        _print_entry(entry)
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    # Non-follow: read last N matching lines
+    limit = 50
+    matching: list[dict[str, Any]] = []
     try:
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        pass
+        with open(jsonl_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if _matches(entry):
+                    matching.append(entry)
+    except OSError as exc:
+        _emit(f"Error reading log file: {exc}", file=sys.stderr)
+        return 1
+
+    # Show only the last `limit` entries
+    for entry in matching[-limit:]:
+        _print_entry(entry)
+
     return 0
 
 
@@ -1183,19 +1302,39 @@ def build_parser() -> argparse.ArgumentParser:
     logs = sub.add_parser(
         "logs",
         formatter_class=_F,
-        help="Tail Docker container logs",
+        help="View local Lerim log entries",
         description=(
-            "View the Lerim Docker container logs.\n\n"
+            "Read and display log entries from ~/.lerim/logs/lerim.jsonl.\n"
+            "By default shows the last 50 entries, formatted for the terminal.\n\n"
             "Examples:\n"
-            "  lerim logs\n"
-            "  lerim logs --follow"
+            "  lerim logs                   # last 50 entries\n"
+            "  lerim logs --level error     # only ERROR entries\n"
+            "  lerim logs --since 1h        # entries from the last hour\n"
+            "  lerim logs -f                # live tail\n"
+            "  lerim logs --json            # raw JSONL output"
         ),
     )
     logs.add_argument(
         "--follow",
         "-f",
         action="store_true",
-        help="Follow log output (like tail -f).",
+        help="Live tail: watch for new log lines and print as they appear.",
+    )
+    logs.add_argument(
+        "--level",
+        default=None,
+        help="Filter by log level (case-insensitive). E.g. error, warning, info.",
+    )
+    logs.add_argument(
+        "--since",
+        default=None,
+        help="Show entries from the last N hours/minutes/days. Format: 1h, 30m, 2d.",
+    )
+    logs.add_argument(
+        "--json",
+        dest="raw_json",
+        action="store_true",
+        help="Output raw JSONL lines instead of formatted text.",
     )
     logs.set_defaults(func=_cmd_logs)
 
@@ -1242,10 +1381,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_SKIP_TRACING_COMMANDS = frozenset({"logs", "version", "help"})
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entrypoint for CLI invocation with global flags and dispatch."""
+    raw_argv = list(argv or sys.argv[1:])
+    # Determine subcommand early to skip heavy init for lightweight commands.
+    first_arg = next((a for a in raw_argv if not a.startswith("-")), None)
     configure_logging()
-    configure_tracing(get_config())
+    if first_arg not in _SKIP_TRACING_COMMANDS:
+        configure_tracing(get_config())
     parser = build_parser()
     args = parser.parse_args(_hoist_global_json_flag(list(argv or sys.argv[1:])))
 
