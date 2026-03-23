@@ -90,15 +90,22 @@ def _post_batch_sync(
         "Content-Type": "application/json",
     }
 
-    if len(body) > _GZIP_THRESHOLD_BYTES:
-        body = gzip.compress(body)
-        headers["Content-Encoding"] = "gzip"
+    # Note: gzip disabled — FastAPI does not decompress Content-Encoding: gzip
+    # by default.  Re-enable once the cloud API adds gzip middleware.
 
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as resp:
             return 200 <= resp.status < 300
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            pass
+        logger.warning("cloud POST {} failed: {} — {}", path, exc, body_text)
+        return False
+    except (urllib.error.URLError, OSError) as exc:
         logger.warning("cloud POST {} failed: {}", path, exc)
         return False
 
@@ -236,10 +243,23 @@ def _query_new_sessions(
         return []
 
 
+def _read_transcript(session_path: str | None) -> str | None:
+    """Read the cached JSONL transcript file for a session, if it exists."""
+    if not session_path:
+        return None
+    try:
+        p = Path(session_path).expanduser()
+        if p.is_file() and p.stat().st_size < 5_000_000:  # skip files > 5MB
+            return p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    return None
+
+
 async def _ship_sessions(
     endpoint: str, token: str, state: _ShipperState, db_path: Path
 ) -> int:
-    """Ship new/updated sessions from SQLite."""
+    """Ship new/updated sessions from SQLite, including cached transcripts."""
     shipped = 0
     latest_indexed_at = state.sessions_shipped_at
 
@@ -250,11 +270,30 @@ async def _ship_sessions(
         if not rows:
             break
 
+        # Map SQLite rows to the API's expected SessionEntry fields
+        _API_FIELDS = {
+            "run_id", "agent_type", "repo_name", "start_time",
+            "duration_ms", "message_count", "tool_call_count",
+            "error_count", "total_tokens", "summary_text",
+            "project", "machine_id", "transcript_jsonl",
+        }
+        sessions_payload = []
+        for row in rows:
+            entry = {k: v for k, v in row.items() if k in _API_FIELDS and v is not None}
+            # Attach transcript from cached JSONL file
+            transcript = _read_transcript(row.get("session_path"))
+            if transcript:
+                entry["transcript_jsonl"] = transcript
+            # Use repo_path as project fallback
+            if "project" not in entry and row.get("repo_path"):
+                entry["project"] = Path(row["repo_path"]).name
+            sessions_payload.append(entry)
+
         ok = await _post_batch(
             endpoint,
             "/api/v1/ingest/sessions",
             token,
-            {"sessions": rows},
+            {"sessions": sessions_payload},
         )
         if ok:
             shipped += len(rows)
@@ -365,7 +404,23 @@ async def _ship_memories(
     latest_updated = state.memories_shipped_at
 
     for i in range(0, len(all_memories), _BATCH_MEMORIES):
-        batch = all_memories[i : i + _BATCH_MEMORIES]
+        raw_batch = all_memories[i : i + _BATCH_MEMORIES]
+        # Map scanned memory files to API's expected MemoryEntry fields
+        batch = []
+        for mem in raw_batch:
+            fm = mem.get("frontmatter") or {}
+            entry: dict[str, Any] = {
+                "memory_id": fm.get("id") or mem.get("file", ""),
+                "memory_type": mem.get("memory_type"),
+                "title": fm.get("title", ""),
+                "body": mem.get("body", ""),
+                "project": mem.get("project"),
+                "tags": fm.get("tags", []) if isinstance(fm.get("tags"), list) else [],
+                "confidence": fm.get("confidence"),
+                "source": fm.get("source"),
+                "status": fm.get("status", "active"),
+            }
+            batch.append(entry)
         ok = await _post_batch(
             endpoint,
             "/api/v1/ingest/memories",
