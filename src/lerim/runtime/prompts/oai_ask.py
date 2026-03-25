@@ -79,6 +79,18 @@ Context docs:
 """
 
 
+def looks_like_auth_error(response: str) -> bool:
+	"""Return whether response text indicates authentication failure."""
+	text = str(response or "").lower()
+	return (
+		"failed to authenticate" in text
+		or "authentication_error" in text
+		or "oauth token has expired" in text
+		or "invalid api key" in text
+		or "unauthorized" in text
+	)
+
+
 if __name__ == "__main__":
 	prompt = build_oai_ask_prompt(
 		"how to deploy",

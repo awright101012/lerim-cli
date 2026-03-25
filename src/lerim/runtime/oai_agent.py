@@ -1,6 +1,6 @@
-"""OpenAI Agents SDK runtime for Lerim sync and maintain flows.
+"""OpenAI Agents SDK runtime for Lerim sync, maintain, and ask flows.
 
-Replaces PydanticAI's LerimAgent for the sync and maintain operations,
+Replaces PydanticAI's LerimAgent for the sync, maintain, and ask operations,
 using the OpenAI Agents SDK with Codex for filesystem operations and
 LitellmModel for provider abstraction.
 """
@@ -29,7 +29,7 @@ from agents.extensions.experimental.codex import (
 
 from lerim.config.settings import Config, get_config
 from lerim.memory.access_tracker import get_access_stats, init_access_db
-from lerim.runtime.agent import (
+from lerim.runtime.helpers import (
 	MaintainResultContract,
 	SyncResultContract,
 	_build_artifact_paths,
@@ -276,7 +276,7 @@ class LerimOAIAgent:
 						)
 					if attempt < max_attempts:
 						wait_time = min(2**attempt, 8)
-						logger.info("[sync] Retrying in %ds...", wait_time)
+						logger.info(f"[sync] Retrying in {wait_time}s...")
 						time.sleep(wait_time)
 
 			cost_usd = stop_cost_tracking()
@@ -568,7 +568,7 @@ class LerimOAIAgent:
 						)
 					if attempt < max_attempts:
 						wait_time = min(2**attempt, 8)
-						logger.info("[maintain] Retrying in %ds...", wait_time)
+						logger.info(f"[maintain] Retrying in {wait_time}s...")
 						time.sleep(wait_time)
 
 			cost_usd = stop_cost_tracking()
@@ -807,4 +807,4 @@ class LerimOAIAgent:
 				try:
 					self._proxy.stop()
 				except Exception as exc:
-					logger.warning("[ask] Failed to stop proxy: %s", exc)
+					logger.warning(f"[ask] Failed to stop proxy: {exc}")

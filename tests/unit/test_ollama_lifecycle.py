@@ -104,6 +104,8 @@ def _make_ollama_config(
         auto_unload=auto_unload,
         agents={},
         projects={},
+        cloud_endpoint="https://api.lerim.dev",
+        cloud_token=None,
     )
 
 
