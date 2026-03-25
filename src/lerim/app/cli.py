@@ -2,7 +2,7 @@
 
 Service commands (ask, sync, maintain, status) are thin HTTP clients that
 talk to a running Lerim server (started via ``lerim up`` or ``lerim serve``).
-Host-only commands (init, project, up, down, logs, connect, memory, daemon)
+Host-only commands (init, project, up, down, logs, connect, memory)
 run locally and never require an HTTP server.
 """
 
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 import urllib.error
@@ -28,7 +27,6 @@ from lerim.adapters.registry import (
 )
 
 from lerim.app.api import (
-    COMPOSE_PATH,
     api_project_add,
     api_project_list,
     api_project_remove,
@@ -41,14 +39,13 @@ from lerim.app.api import (
 )
 from lerim.app.arg_utils import parse_csv
 from lerim.app.daemon import (
-    run_daemon_forever,
-    run_daemon_once,
     run_maintain_once,
     run_sync_once,
     resolve_window_bounds,
 )
 from lerim.config.project_scope import resolve_data_dirs
 from lerim.config.logging import configure_logging
+from lerim.app.auth import cmd_auth, cmd_auth_logout, cmd_auth_status
 from lerim.config.settings import get_config, USER_CONFIG_PATH
 from lerim.config.tracing import configure_tracing
 from lerim.memory.memory_repo import build_memory_paths, reset_memory_root
@@ -228,19 +225,6 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
     if data is None:
         return _not_running()
     _emit_structured(title="Maintain:", payload=data, as_json=args.json)
-    return 0
-
-
-def _cmd_daemon(args: argparse.Namespace) -> int:
-    """Handle daemon commands for one-shot or continuous execution."""
-    max_sessions = getattr(args, "max_sessions", None)
-    if args.once:
-        payload = run_daemon_once(max_sessions=max_sessions)
-        _emit_structured(
-            title="Daemon once result:", payload=payload, as_json=args.json
-        )
-        return 0
-    run_daemon_forever(poll_seconds=args.poll_seconds)
     return 0
 
 
@@ -530,18 +514,137 @@ def _cmd_down(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_since(since: str) -> float:
+    """Parse a relative duration string (e.g. ``1h``, ``30m``, ``2d``) into seconds."""
+    import re
+
+    m = re.fullmatch(r"(\d+)\s*([smhd])", since.strip().lower())
+    if not m:
+        raise ValueError(f"Invalid --since format: {since!r}  (expected e.g. 1h, 30m, 2d)")
+    value, unit = int(m.group(1)), m.group(2)
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return value * multipliers[unit]
+
+
+def _fmt_log_line(entry: dict[str, Any], *, color: bool) -> str:
+    """Format a parsed JSONL log entry for terminal display."""
+    ts_raw = str(entry.get("ts") or "")
+    # Extract HH:MM:SS from ISO-8601 timestamp
+    hms = ts_raw[11:19] if len(ts_raw) >= 19 else ts_raw
+    level = str(entry.get("level") or "").upper()
+    message = str(entry.get("message") or "")
+
+    if not color:
+        return f"{hms} | {level:<8} | {message}"
+
+    # ANSI colour codes for log levels
+    _LEVEL_COLORS: dict[str, str] = {
+        "TRACE": "\033[37m",     # white/grey
+        "DEBUG": "\033[36m",     # cyan
+        "INFO": "\033[32m",      # green
+        "SUCCESS": "\033[1;32m", # bold green
+        "WARNING": "\033[33m",   # yellow
+        "ERROR": "\033[31m",     # red
+        "CRITICAL": "\033[1;31m",  # bold red
+    }
+    _RESET = "\033[0m"
+    clr = _LEVEL_COLORS.get(level, "")
+    return f"\033[32m{hms}\033[0m | {clr}{level:<8}{_RESET} | {clr}{message}{_RESET}"
+
+
 def _cmd_logs(args: argparse.Namespace) -> int:
-    """Tail Docker container logs."""
-    if not COMPOSE_PATH.exists():
-        _emit("No compose file found. Run `lerim up` first.", file=sys.stderr)
+    """Read and display local JSONL log entries from ``~/.lerim/logs/lerim.jsonl``."""
+    from lerim.config.logging import LOG_DIR
+
+    jsonl_path = LOG_DIR / "lerim.jsonl"
+
+    if not jsonl_path.exists():
+        _emit("No log file found. Logs will appear after Lerim runs.", file=sys.stderr)
         return 1
-    cmd = ["docker", "compose", "-f", str(COMPOSE_PATH), "logs"]
-    if args.follow:
-        cmd.append("--follow")
+
+    is_tty = sys.stdout.isatty()
+    raw_json = getattr(args, "raw_json", False) or getattr(args, "json", False)
+    level_filter = (getattr(args, "level", None) or "").upper() or None
+    since_str = getattr(args, "since", None)
+    follow = getattr(args, "follow", False)
+
+    # Compute cutoff timestamp for --since
+    cutoff_ts: float | None = None
+    if since_str:
+        import datetime as _dt
+
+        cutoff_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=_parse_since(since_str))).timestamp()
+
+    def _matches(entry: dict[str, Any]) -> bool:
+        """Return True if the entry passes level and time filters."""
+        if level_filter and str(entry.get("level") or "").upper() != level_filter:
+            return False
+        if cutoff_ts is not None:
+            from datetime import datetime, timezone
+
+            ts_raw = str(entry.get("ts") or "")
+            try:
+                entry_dt = datetime.fromisoformat(ts_raw)
+                if entry_dt.tzinfo is None:
+                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                if entry_dt.timestamp() < cutoff_ts:
+                    return False
+            except (ValueError, TypeError):
+                return False
+        return True
+
+    def _print_entry(entry: dict[str, Any]) -> None:
+        if raw_json:
+            _emit(json.dumps(entry, ensure_ascii=True, default=str))
+        else:
+            _emit(_fmt_log_line(entry, color=is_tty))
+
+    if follow:
+        # Live tail: seek to end, then poll for new lines
+        try:
+            with open(jsonl_path, "r", encoding="utf-8") as fh:
+                fh.seek(0, 2)  # seek to end
+                while True:
+                    line = fh.readline()
+                    if not line:
+                        time.sleep(0.25)
+                        continue
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if _matches(entry):
+                        _print_entry(entry)
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    # Non-follow: read last N matching lines
+    limit = 50
+    matching: list[dict[str, Any]] = []
     try:
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        pass
+        with open(jsonl_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if _matches(entry):
+                    matching.append(entry)
+    except OSError as exc:
+        _emit(f"Error reading log file: {exc}", file=sys.stderr)
+        return 1
+
+    # Show only the last `limit` entries
+    for entry in matching[-limit:]:
+        _print_entry(entry)
+
     return 0
 
 
@@ -636,6 +739,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
                     logger.warning("daemon maintain error: {}", exc)
                 last_maintain = time.monotonic()
 
+            # Ship to cloud (best-effort)
+            if config.cloud_token:
+                try:
+                    from lerim.app.cloud_shipper import ship_once
+                    import asyncio
+                    results = asyncio.run(ship_once(config))
+                    if results:
+                        logger.info("cloud sync: {}", results)
+                except Exception as exc:
+                    logger.warning("cloud sync error: {}", exc)
+
             next_sync = last_sync + sync_interval
             next_maintain = last_maintain + maintain_interval
             sleep_for = max(1.0, min(next_sync, next_maintain) - time.monotonic())
@@ -700,6 +814,17 @@ def _cmd_skill(args: argparse.Namespace) -> int:
     _emit("  ~/.agents/skills/lerim  → Cursor, Codex, OpenCode, and others")
     _emit("  ~/.claude/skills/lerim  → Claude Code")
     return 0
+
+
+def _cmd_auth_dispatch(args: argparse.Namespace) -> int:
+    """Dispatch auth subcommands to the appropriate handler."""
+    auth_command = getattr(args, "auth_command", None)
+    if auth_command == "status":
+        return cmd_auth_status(args)
+    if auth_command == "logout":
+        return cmd_auth_logout(args)
+    # Default: login (bare `lerim auth` or `lerim auth login`)
+    return cmd_auth(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -864,38 +989,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview mode: record a run but skip all actual memory changes.",
     )
     maintain.set_defaults(func=_cmd_maintain)
-
-    # ── daemon ───────────────────────────────────────────────────────
-    daemon = sub.add_parser(
-        "daemon",
-        formatter_class=_F,
-        help="Run recurring sync + maintain loop",
-        description=(
-            "Runs a continuous loop: sync (index + extract) then maintain (refine),\n"
-            "repeating at a configurable interval. Use --once for a single cycle.\n\n"
-            "Examples:\n"
-            "  lerim daemon                  # run forever with default poll interval\n"
-            "  lerim daemon --once           # run one sync+maintain cycle and exit\n"
-            "  lerim daemon --poll-seconds 120  # poll every 2 minutes"
-        ),
-    )
-    daemon.add_argument(
-        "--once",
-        action="store_true",
-        help="Run exactly one sync+maintain cycle and exit (instead of looping forever).",
-    )
-    daemon.add_argument(
-        "--max-sessions",
-        type=int,
-        default=None,
-        help="Max sessions to extract per cycle. (default: sync_max_sessions from config)",
-    )
-    daemon.add_argument(
-        "--poll-seconds",
-        type=int,
-        help="Override both sync and maintain intervals uniformly (seconds). Minimum 30s.",
-    )
-    daemon.set_defaults(func=_cmd_daemon)
 
     # ── dashboard ────────────────────────────────────────────────────
     dashboard = sub.add_parser(
@@ -1183,19 +1276,39 @@ def build_parser() -> argparse.ArgumentParser:
     logs = sub.add_parser(
         "logs",
         formatter_class=_F,
-        help="Tail Docker container logs",
+        help="View local Lerim log entries",
         description=(
-            "View the Lerim Docker container logs.\n\n"
+            "Read and display log entries from ~/.lerim/logs/lerim.jsonl.\n"
+            "By default shows the last 50 entries, formatted for the terminal.\n\n"
             "Examples:\n"
-            "  lerim logs\n"
-            "  lerim logs --follow"
+            "  lerim logs                   # last 50 entries\n"
+            "  lerim logs --level error     # only ERROR entries\n"
+            "  lerim logs --since 1h        # entries from the last hour\n"
+            "  lerim logs -f                # live tail\n"
+            "  lerim logs --json            # raw JSONL output"
         ),
     )
     logs.add_argument(
         "--follow",
         "-f",
         action="store_true",
-        help="Follow log output (like tail -f).",
+        help="Live tail: watch for new log lines and print as they appear.",
+    )
+    logs.add_argument(
+        "--level",
+        default=None,
+        help="Filter by log level (case-insensitive). E.g. error, warning, info.",
+    )
+    logs.add_argument(
+        "--since",
+        default=None,
+        help="Show entries from the last N hours/minutes/days. Format: 1h, 30m, 2d.",
+    )
+    logs.add_argument(
+        "--json",
+        dest="raw_json",
+        action="store_true",
+        help="Output raw JSONL lines instead of formatted text.",
     )
     logs.set_defaults(func=_cmd_logs)
 
@@ -1239,13 +1352,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     skill.set_defaults(func=_cmd_skill)
 
+    # ── auth ──────────────────────────────────────────────────────────
+    auth = sub.add_parser(
+        "auth",
+        formatter_class=_F,
+        help="Authenticate with Lerim Cloud",
+        description=(
+            "Log in, check status, or log out of Lerim Cloud.\n\n"
+            "The default action (no subcommand) opens a browser for OAuth login.\n"
+            "Use --token to authenticate manually without a browser.\n\n"
+            "Subcommands:\n"
+            "  status   Check current authentication state\n"
+            "  logout   Remove stored credentials\n\n"
+            "Examples:\n"
+            "  lerim auth                     # browser-based login\n"
+            "  lerim auth --token lerim_tok_abc123  # manual token\n"
+            "  lerim auth status              # check auth state\n"
+            "  lerim auth logout              # remove token"
+        ),
+    )
+    auth.add_argument(
+        "--token",
+        default=None,
+        help="Authenticate with a token directly (skip browser flow).",
+    )
+    auth_sub = auth.add_subparsers(dest="auth_command")
+
+    auth_sub.add_parser(
+        "login",
+        formatter_class=_F,
+        help="Log in to Lerim Cloud (same as bare `lerim auth`)",
+    )
+
+    auth_sub.add_parser(
+        "status",
+        formatter_class=_F,
+        help="Check current authentication state",
+    )
+
+    auth_sub.add_parser(
+        "logout",
+        formatter_class=_F,
+        help="Remove stored credentials",
+    )
+
+    auth.set_defaults(func=_cmd_auth_dispatch)
+
     return parser
+
+
+_SKIP_TRACING_COMMANDS = frozenset({"auth", "logs", "version", "help"})
 
 
 def main(argv: list[str] | None = None) -> int:
     """Entrypoint for CLI invocation with global flags and dispatch."""
+    raw_argv = list(argv or sys.argv[1:])
+    # Determine subcommand early to skip heavy init for lightweight commands.
+    first_arg = next((a for a in raw_argv if not a.startswith("-")), None)
     configure_logging()
-    configure_tracing(get_config())
+    if first_arg not in _SKIP_TRACING_COMMANDS:
+        configure_tracing(get_config())
     parser = build_parser()
     args = parser.parse_args(_hoist_global_json_flag(list(argv or sys.argv[1:])))
 

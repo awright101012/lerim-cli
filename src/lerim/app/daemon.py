@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lerim.app.activity_log import log_activity
-from lerim.app.arg_utils import parse_duration_to_seconds
 from lerim.config.project_scope import match_session_project
 from lerim.config.settings import get_config, reload_config
 from lerim.runtime.agent import LerimAgent
@@ -413,6 +412,15 @@ def run_sync_once(
             return EXIT_LOCK_BUSY, _empty_sync_summary()
 
     try:
+        record_service_run(
+            job_type="sync",
+            status="started",
+            started_at=started,
+            completed_at=None,
+            trigger=trigger,
+            details=None,
+        )
+
         config = get_config()
         target_run_ids: list[str] = []
         indexed_sessions = 0
@@ -559,6 +567,16 @@ def run_sync_once(
                 cost_usd=cost_usd,
             )
         return code, summary
+    except Exception as exc:
+        _record_service_event(
+            record_service_run,
+            job_type="sync",
+            status="failed",
+            started_at=started,
+            trigger=trigger,
+            details={"error": str(exc)},
+        )
+        return EXIT_FATAL, _empty_sync_summary()
     finally:
         if lock:
             lock.release()
@@ -675,150 +693,3 @@ def run_maintain_once(
         writer.release()
 
 
-def run_daemon_once(max_sessions: int | None = None) -> dict:
-    """Run one bounded daemon cycle: sync then maintain."""
-    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
-
-    config = get_config()
-    effective_max = max_sessions or config.sync_max_sessions
-    window_start, window_end = resolve_window_bounds(
-        window=f"{config.sync_window_days}d",
-        since_raw=None,
-        until_raw=None,
-        parse_duration_to_seconds=parse_duration_to_seconds,
-    )
-
-    with ollama_lifecycle(config):
-        sync_code, sync_summary = run_sync_once(
-            run_id=None,
-            agent_filter=None,
-            no_extract=False,
-            force=False,
-            max_sessions=effective_max,
-            dry_run=False,
-            ignore_lock=False,
-            trigger="daemon",
-            window_start=window_start,
-            window_end=window_end,
-        )
-        maintain_code, maintain_data = run_maintain_once(
-            force=False,
-            dry_run=False,
-        )
-    return {
-        "sync_code": sync_code,
-        "sync_summary": sync_summary.__dict__,
-        "maintain_code": maintain_code,
-        "maintain": maintain_data,
-    }
-
-
-def run_daemon_forever(poll_seconds: int | None = None) -> None:
-    """Run daemon loop with independent sync and maintain intervals.
-
-    When *poll_seconds* is given (e.g. via ``--poll-seconds``), both intervals
-    are overridden uniformly so the caller gets a single predictable cadence.
-    Otherwise ``sync_interval_minutes`` and ``maintain_interval_minutes`` from
-    config drive each path independently.
-    """
-    config = get_config()
-
-    if poll_seconds and poll_seconds > 0:
-        sync_interval = poll_seconds
-        maintain_interval = poll_seconds
-    else:
-        sync_interval = max(config.sync_interval_minutes * 60, 30)
-        maintain_interval = max(config.maintain_interval_minutes * 60, 30)
-
-    # Initialise to (now - interval) so both trigger on the first
-    # iteration regardless of the monotonic clock epoch (see Docker note
-    # in _cmd_serve._daemon_loop).
-    _now_init = time.monotonic()
-    last_sync = _now_init - sync_interval
-    last_maintain = _now_init - maintain_interval
-
-    from lerim.config.logging import logger
-
-    logger.info(
-        "daemon loop started (sync every {}s, maintain every {}s)",
-        sync_interval,
-        maintain_interval,
-    )
-
-    while True:
-        now = time.monotonic()
-
-        if now - last_sync >= sync_interval:
-            try:
-                _code, summary = _run_sync_cycle()
-                logger.info(
-                    "daemon sync done — indexed={} extracted={} skipped={} failed={}",
-                    summary.indexed_sessions,
-                    summary.extracted_sessions,
-                    summary.skipped_sessions,
-                    summary.failed_sessions,
-                )
-            except Exception as exc:
-                logger.warning("daemon sync error: {}", exc)
-            last_sync = time.monotonic()
-
-        if now - last_maintain >= maintain_interval:
-            try:
-                _code, details = _run_maintain_cycle()
-                logger.info("daemon maintain done — {}", details)
-            except Exception as exc:
-                logger.warning("daemon maintain error: {}", exc)
-            last_maintain = time.monotonic()
-
-        # Sleep until the next task is due.
-        next_sync = last_sync + sync_interval
-        next_maintain = last_maintain + maintain_interval
-        sleep_for = max(1.0, min(next_sync, next_maintain) - time.monotonic())
-        time.sleep(sleep_for)
-
-
-def _run_sync_cycle() -> tuple[int, SyncSummary]:
-    """Execute one sync cycle using current config window bounds."""
-    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
-
-    config = get_config()
-    window_start, window_end = resolve_window_bounds(
-        window=f"{config.sync_window_days}d",
-        since_raw=None,
-        until_raw=None,
-        parse_duration_to_seconds=parse_duration_to_seconds,
-    )
-    with ollama_lifecycle(config):
-        return run_sync_once(
-            run_id=None,
-            agent_filter=None,
-            no_extract=False,
-            force=False,
-            max_sessions=config.sync_max_sessions,
-            dry_run=False,
-            ignore_lock=False,
-            trigger="daemon",
-            window_start=window_start,
-            window_end=window_end,
-        )
-
-
-def _run_maintain_cycle() -> tuple[int, dict]:
-    """Execute one maintain cycle."""
-    from lerim.runtime.ollama_lifecycle import ollama_lifecycle
-
-    config = get_config()
-    with ollama_lifecycle(config):
-        return run_maintain_once(force=False, dry_run=False, trigger="daemon")
-
-
-if __name__ == "__main__":
-    since, until = resolve_window_bounds(
-        window="1d",
-        since_raw=None,
-        until_raw=None,
-        parse_duration_to_seconds=parse_duration_to_seconds,
-    )
-    assert until is not None
-    assert since is None or since <= until
-    assert callable(run_maintain_once)

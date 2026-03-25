@@ -43,16 +43,25 @@ def configure_dspy_lms(role: str = "extract") -> list[dspy.LM]:
 
 
 def call_with_fallback(module, lms: list[dspy.LM], **kwargs):
-    """Call a DSPy module, falling back to next LM on failure."""
+    """Call a DSPy module, falling back to next LM on failure.
+
+    Returns (lm, result) tuple. Raises RuntimeError when all LMs fail or
+    the LM list is empty.
+    """
+    if not lms:
+        raise RuntimeError("call_with_fallback: lms list is empty, no models to try")
     last_err = None
     for lm in lms:
         try:
             with dspy.context(lm=lm, adapter=XMLAdapter()):
-                return lm, module(**kwargs)
+                result = module(**kwargs)
+                return lm, result
         except Exception as e:
             logger.warning("DSPy LM {} failed: {}, trying fallback", lm.model, e)
             last_err = e
-    raise last_err
+    raise RuntimeError(
+        f"call_with_fallback: all {len(lms)} LM(s) failed"
+    ) from last_err
 
 
 def estimate_tokens(text: str) -> int:

@@ -3,8 +3,7 @@
 Layers (low to high priority):
 1. lerim/config/default.toml
 2. ~/.lerim/config.toml
-3. <repo>/.lerim/config.toml
-4. LERIM_CONFIG env path (optional explicit override)
+3. LERIM_CONFIG env path (optional explicit override)
 
 API keys are read from environment variables only.
 """
@@ -20,7 +19,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from lerim.config.project_scope import git_root_for, resolve_data_dirs
+from lerim.config.project_scope import resolve_data_dirs
 
 PACKAGE_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = PACKAGE_DIR / "default.toml"
@@ -217,11 +216,6 @@ def _load_layers() -> tuple[dict[str, Any], list[dict[str, str]]]:
         ("user", USER_CONFIG_PATH),
     ]
 
-    project_root = git_root_for(Path.cwd())
-    if project_root:
-        project_dir = project_root / ".lerim"
-        layers.append(("project", project_dir / "config.toml"))
-
     explicit = os.getenv("LERIM_CONFIG")
     if explicit:
         layers.append(("explicit", Path(explicit).expanduser()))
@@ -287,6 +281,9 @@ class Config:
 
     provider_api_bases: dict[str, str]
     auto_unload: bool
+
+    cloud_endpoint: str
+    cloud_token: str | None
 
     agents: dict[str, str]
     projects: dict[str, str]
@@ -394,6 +391,8 @@ class Config:
             "tracing_include_content": self.tracing_include_content,
             "provider_api_bases": dict(self.provider_api_bases),
             "auto_unload": self.auto_unload,
+            "cloud_endpoint": self.cloud_endpoint,
+            "cloud_authenticated": self.cloud_token is not None,
             "agents": dict(self.agents),
             "projects": dict(self.projects),
         }
@@ -572,6 +571,12 @@ def load_config() -> Config:
     if port > 65535:
         port = 8765
 
+    cloud = (
+        toml_data.get("cloud", {})
+        if isinstance(toml_data.get("cloud", {}), dict)
+        else {}
+    )
+
     agents_raw = toml_data.get("agents", {})
     agents = _parse_string_table(agents_raw if isinstance(agents_raw, dict) else {})
     projects_raw = toml_data.get("projects", {})
@@ -583,6 +588,17 @@ def load_config() -> Config:
     platforms_path = global_data_dir / "platforms.json"
     if not agents and platforms_path.exists():
         agents = _migrate_platforms_json(platforms_path)
+
+    cloud_endpoint = (
+        _to_non_empty_string(os.environ.get("LERIM_CLOUD_ENDPOINT"))
+        or _to_non_empty_string(cloud.get("endpoint"))
+        or "https://api.lerim.dev"
+    )
+    cloud_token = (
+        _to_non_empty_string(os.environ.get("LERIM_CLOUD_TOKEN"))
+        or _to_non_empty_string(cloud.get("token"))
+        or None
+    )
 
     return Config(
         data_dir=primary,
@@ -636,6 +652,8 @@ def load_config() -> Config:
             else {}
         ),
         auto_unload=bool((toml_data.get("providers") or {}).get("auto_unload", True)),
+        cloud_endpoint=cloud_endpoint,
+        cloud_token=cloud_token,
         agents=agents,
         projects=projects,
     )
@@ -858,6 +876,8 @@ def build_eval_config(
             else {}
         ),
         auto_unload=bool((toml_data.get("providers") or {}).get("auto_unload", True)),
+        cloud_endpoint="https://api.lerim.dev",
+        cloud_token=None,
         agents=agents,
         projects=projects,
     )
