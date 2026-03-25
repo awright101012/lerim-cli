@@ -3,7 +3,7 @@ repos:
     rev: v0.15.7
     hooks:
       - id: ruff
-        args: [check, src/, tests/]
+        args: [src/, tests/]
         pass_filenames: false
         always_run: true
         stages: [pre-push]
