@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
-from lerim.runtime.oai_context import OAIRuntimeContext, build_oai_context
+from lerim.runtime.oai_context import build_oai_context
 from tests.helpers import make_config
 
 

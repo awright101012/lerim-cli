@@ -133,7 +133,6 @@ def test_compose_mounts_lerim_dirs_only(tmp_path, monkeypatch) -> None:
     # Should mount project/.lerim, not project/ directly
     assert ".lerim" in content
     # The project path without .lerim should NOT appear as a standalone mount
-    project_path = str(tmp_path / "myproject")
     lerim_path = str(tmp_path / "myproject" / ".lerim")
     # lerim_path should be in volumes, bare project_path should not be a mount target
     assert lerim_path in content

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 
 from lerim.runtime.responses_proxy import (
 	convert_request_to_chat,

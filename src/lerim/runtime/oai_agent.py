@@ -15,17 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from agents import Agent, Runner, set_tracing_disabled
-from agents.extensions.models.litellm_model import LitellmModel
-
-# Disable OAI SDK tracing — it exports to OpenAI servers using OPENAI_API_KEY.
-# Lerim uses its own tracing via Logfire.
-set_tracing_disabled(disabled=True)
 from agents.extensions.experimental.codex import (
 	CodexOptions,
 	ThreadOptions,
 	TurnOptions,
 	codex_tool,
 )
+from agents.extensions.models.litellm_model import LitellmModel
 
 from lerim.config.settings import Config, get_config
 from lerim.memory.access_tracker import get_access_stats, init_access_db
@@ -73,6 +69,9 @@ class LerimOAIAgent:
 			default_cwd: Default working directory for path resolution.
 			config: Lerim config; loaded via get_config() if not provided.
 		"""
+		# Disable OAI SDK tracing (exports to OpenAI servers by default).
+		set_tracing_disabled(disabled=True)
+
 		cfg = config or get_config()
 		self.config = cfg
 		self._default_cwd = default_cwd

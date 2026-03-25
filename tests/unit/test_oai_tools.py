@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-from agents import RunContextWrapper
 
 from lerim.runtime.oai_context import OAIRuntimeContext, build_oai_context
 from lerim.runtime.oai_tools import write_memory
