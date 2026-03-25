@@ -637,6 +637,24 @@ def run_maintain_once(
                 agent = LerimAgent(default_cwd=str(project_path))
                 result = agent.maintain(memory_root=project_memory)
                 results[project_name] = result
+                # Include intelligence data from maintain_actions if available
+                if isinstance(result, dict) and result.get("artifacts"):
+                    actions_path = result["artifacts"].get("maintain_actions")
+                    if actions_path and Path(actions_path).exists():
+                        try:
+                            actions_report = json.loads(
+                                Path(actions_path).read_text(encoding="utf-8")
+                            )
+                            if isinstance(actions_report, dict):
+                                csa = actions_report.get("cross_session_analysis")
+                                if csa:
+                                    result["cross_session_analysis"] = csa
+                        except (json.JSONDecodeError, OSError):
+                            pass
+                # Check for hot-memory
+                hot_memory_path = Path(project_memory).parent / "hot-memory.md"
+                if hot_memory_path.exists():
+                    result["hot_memory_exists"] = True
                 # Activity log per project.
                 counts = (
                     (result.get("counts") or {}) if isinstance(result, dict) else {}
