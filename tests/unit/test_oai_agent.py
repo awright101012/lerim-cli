@@ -1,4 +1,4 @@
-"""Unit tests for LerimOAIAgent sync flow."""
+"""Unit tests for LerimOAIAgent sync and maintain flows."""
 
 from __future__ import annotations
 
@@ -10,6 +10,10 @@ import pytest
 
 from lerim.config.settings import LLMRoleConfig
 from lerim.runtime.oai_agent import LerimOAIAgent
+from lerim.runtime.prompts.oai_maintain import (
+	build_oai_maintain_artifact_paths,
+	build_oai_maintain_prompt,
+)
 from lerim.runtime.prompts.oai_sync import build_oai_sync_prompt
 from tests.helpers import make_config
 
@@ -169,3 +173,183 @@ def test_oai_agent_sync_missing_trace(tmp_path):
 	agent = LerimOAIAgent(default_cwd=str(tmp_path), config=cfg)
 	with pytest.raises(FileNotFoundError, match="trace_path_missing"):
 		agent.sync(tmp_path / "nonexistent.jsonl")
+
+
+# ---------------------------------------------------------------------------
+# Maintain prompt tests (no LLM calls)
+# ---------------------------------------------------------------------------
+
+
+def _make_maintain_artifacts(tmp_path):
+	"""Build maintain artifact paths for testing."""
+	run_folder = tmp_path / "workspace" / "maintain-test"
+	return run_folder, build_oai_maintain_artifact_paths(run_folder)
+
+
+def test_oai_maintain_prompt_contains_steps(tmp_path):
+	"""Maintain prompt should contain all 9 steps."""
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	prompt = build_oai_maintain_prompt(
+		memory_root=tmp_path / "memory",
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+	)
+	assert "SCAN MEMORIES" in prompt
+	assert "CROSS-SESSION ANALYSIS" in prompt
+	assert "ANALYZE DUPLICATES" in prompt
+	assert "MERGE" in prompt
+	assert "ARCHIVE" in prompt
+	assert "DECAY" in prompt
+	assert "CONSOLIDATE" in prompt
+	assert "HOT MEMORY" in prompt or "hot-memory" in prompt
+	assert "REPORT" in prompt
+
+
+def test_oai_maintain_prompt_cross_session_analysis(tmp_path):
+	"""Maintain prompt should include signal, contradiction, and gap detection."""
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	prompt = build_oai_maintain_prompt(
+		memory_root=tmp_path / "memory",
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+	)
+	assert "signal" in prompt.lower() or "amplif" in prompt.lower()
+	assert "contradiction" in prompt.lower()
+	assert "gap" in prompt.lower()
+
+
+def test_oai_maintain_prompt_hot_memory_path(tmp_path):
+	"""Maintain prompt should reference the hot-memory.md path."""
+	memory_root = tmp_path / "memory"
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	prompt = build_oai_maintain_prompt(
+		memory_root=memory_root,
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+	)
+	expected_hot_memory = str(memory_root.parent / "hot-memory.md")
+	assert expected_hot_memory in prompt or "hot-memory.md" in prompt
+
+
+def test_oai_maintain_prompt_no_explore_tool(tmp_path):
+	"""Maintain prompt should NOT reference explore() tool — uses codex."""
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	prompt = build_oai_maintain_prompt(
+		memory_root=tmp_path / "memory",
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+	)
+	assert "explore()" not in prompt
+	assert "codex" in prompt.lower()
+
+
+def test_oai_maintain_prompt_with_access_stats(tmp_path):
+	"""Maintain prompt should include access stats when provided."""
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	stats = [
+		{"memory_id": "20260301-test", "last_accessed": "2026-03-01T10:00:00Z", "access_count": 5},
+	]
+	prompt = build_oai_maintain_prompt(
+		memory_root=tmp_path / "memory",
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+		access_stats=stats,
+	)
+	assert "20260301-test" in prompt
+	assert "DECAY POLICY" in prompt
+
+
+def test_oai_maintain_prompt_without_access_stats(tmp_path):
+	"""Maintain prompt without access stats should skip decay."""
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	prompt = build_oai_maintain_prompt(
+		memory_root=tmp_path / "memory",
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+		access_stats=None,
+	)
+	assert "No access data available" in prompt
+
+
+def test_oai_maintain_artifact_paths(tmp_path):
+	"""Maintain artifact paths should include standard keys."""
+	run_folder = tmp_path / "workspace" / "maintain-test"
+	paths = build_oai_maintain_artifact_paths(run_folder)
+	assert "maintain_actions" in paths
+	assert "agent_log" in paths
+	assert "subagents_log" in paths
+
+
+def test_oai_maintain_prompt_summaries_reference(tmp_path):
+	"""Maintain prompt should instruct reading summaries for cross-session analysis."""
+	run_folder, artifact_paths = _make_maintain_artifacts(tmp_path)
+	prompt = build_oai_maintain_prompt(
+		memory_root=tmp_path / "memory",
+		run_folder=run_folder,
+		artifact_paths=artifact_paths,
+	)
+	assert "summaries" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Schema tests
+# ---------------------------------------------------------------------------
+
+
+def test_memory_candidate_outcome_field():
+	"""MemoryCandidate should support the outcome field."""
+	from lerim.memory.schemas import MemoryCandidate
+	c = MemoryCandidate(
+		primitive="learning",
+		kind="insight",
+		title="Test",
+		body="Test content",
+		confidence=0.8,
+		outcome="worked",
+	)
+	assert c.outcome == "worked"
+
+
+def test_memory_candidate_outcome_default_none():
+	"""MemoryCandidate outcome should default to None."""
+	from lerim.memory.schemas import MemoryCandidate
+	c = MemoryCandidate(
+		primitive="decision",
+		title="Test",
+		body="Test content",
+	)
+	assert c.outcome is None
+
+
+def test_memory_record_outcome_in_frontmatter():
+	"""MemoryRecord with outcome should include it in frontmatter."""
+	from lerim.memory.memory_record import MemoryRecord
+	r = MemoryRecord(
+		id="test",
+		primitive="learning",
+		kind="pitfall",
+		title="Test",
+		body="Content",
+		confidence=0.8,
+		outcome="failed",
+		source="test-run",
+	)
+	fm = r.to_frontmatter_dict()
+	assert fm["outcome"] == "failed"
+	md = r.to_markdown()
+	assert "outcome: failed" in md
+
+
+def test_memory_record_no_outcome_in_frontmatter():
+	"""MemoryRecord without outcome should not include it in frontmatter."""
+	from lerim.memory.memory_record import MemoryRecord
+	r = MemoryRecord(
+		id="test",
+		primitive="decision",
+		title="Test",
+		body="Content",
+		confidence=0.9,
+		source="test-run",
+	)
+	fm = r.to_frontmatter_dict()
+	assert "outcome" not in fm

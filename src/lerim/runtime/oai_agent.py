@@ -1,8 +1,8 @@
-"""OpenAI Agents SDK runtime for Lerim sync flow.
+"""OpenAI Agents SDK runtime for Lerim sync and maintain flows.
 
-Replaces PydanticAI's LerimAgent for the sync operation, using the
-OpenAI Agents SDK with Codex for filesystem operations and LitellmModel
-for provider abstraction.
+Replaces PydanticAI's LerimAgent for the sync and maintain operations,
+using the OpenAI Agents SDK with Codex for filesystem operations and
+LitellmModel for provider abstraction.
 """
 
 from __future__ import annotations
@@ -28,7 +28,9 @@ from agents.extensions.experimental.codex import (
 )
 
 from lerim.config.settings import Config, get_config
+from lerim.memory.access_tracker import get_access_stats, init_access_db
 from lerim.runtime.agent import (
+	MaintainResultContract,
 	SyncResultContract,
 	_build_artifact_paths,
 	_default_run_folder_name,
@@ -46,6 +48,10 @@ from lerim.runtime.oai_tools import (
 	summarize_pipeline,
 	write_memory,
 )
+from lerim.runtime.prompts.oai_maintain import (
+	build_oai_maintain_artifact_paths,
+	build_oai_maintain_prompt,
+)
 from lerim.runtime.prompts.oai_sync import build_oai_sync_prompt
 from lerim.runtime.responses_proxy import ResponsesProxy
 
@@ -53,7 +59,7 @@ logger = logging.getLogger("lerim.runtime.oai")
 
 
 class LerimOAIAgent:
-	"""Lead runtime wrapper for the OpenAI Agents SDK sync flow."""
+	"""Lead runtime wrapper for the OpenAI Agents SDK sync and maintain flows."""
 
 	def __init__(
 		self,
@@ -386,4 +392,282 @@ class LerimOAIAgent:
 				except Exception as exc:
 					logger.warning(
 						"[sync] Failed to stop proxy: %s", exc
+					)
+
+	# ------------------------------------------------------------------
+	# Maintain flow
+	# ------------------------------------------------------------------
+
+	def _build_maintain_agent(
+		self,
+		*,
+		prompt: str,
+		memory_root: Path,
+		codex_opts: dict,
+		thread_opts: dict,
+	) -> Agent[OAIRuntimeContext]:
+		"""Build the OAI Agent for the maintain flow.
+
+		The maintain agent only has codex_tool + write_memory. No
+		extract/summarize pipelines — those are sync-only.
+		"""
+		# Clean codex_opts: remove proxy-construction keys that are not
+		# valid CodexOptions fields.
+		clean_codex_opts = {
+			k: v
+			for k, v in codex_opts.items()
+			if k not in ("backend_url", "backend_api_key")
+		}
+
+		agent: Agent[OAIRuntimeContext] = Agent(
+			name="LerimMaintain",
+			instructions=prompt,
+			model=self._lead_model,
+			tools=[
+				codex_tool(
+					codex_options=CodexOptions(**clean_codex_opts),
+					sandbox_mode="workspace-write",
+					working_directory=str(memory_root),
+					skip_git_repo_check=True,
+					default_thread_options=ThreadOptions(**thread_opts),
+					default_turn_options=TurnOptions(idle_timeout_seconds=120),
+				),
+				write_memory,
+			],
+		)
+		return agent
+
+	def maintain(
+		self,
+		memory_root: str | Path | None = None,
+		workspace_root: str | Path | None = None,
+	) -> dict[str, Any]:
+		"""Run memory maintenance flow and return stable contract payload.
+
+		Mirrors the existing LerimAgent.maintain() contract, returning
+		a MaintainResultContract-validated dict.
+
+		Args:
+			memory_root: Override for the memory directory.
+			workspace_root: Override for the workspace directory.
+
+		Returns:
+			Validated MaintainResultContract payload dict.
+
+		Raises:
+			RuntimeError: On agent failure or missing artifacts.
+		"""
+		repo_root = Path(self._default_cwd or Path.cwd()).expanduser().resolve()
+		resolved_memory_root, resolved_workspace_root = _resolve_runtime_roots(
+			config=self.config,
+			memory_root=memory_root,
+			workspace_root=workspace_root,
+		)
+		run_folder = resolved_workspace_root / _default_run_folder_name("maintain")
+		run_folder.mkdir(parents=True, exist_ok=True)
+		artifact_paths = build_oai_maintain_artifact_paths(run_folder)
+
+		# Initialize access tracking and fetch stats for decay
+		init_access_db(self.config.memories_db_path)
+		access_stats = get_access_stats(
+			self.config.memories_db_path,
+			str(resolved_memory_root),
+		)
+
+		prompt = build_oai_maintain_prompt(
+			memory_root=resolved_memory_root,
+			run_folder=run_folder,
+			artifact_paths=artifact_paths,
+			access_stats=access_stats,
+			decay_days=self.config.decay_days,
+			decay_archive_threshold=self.config.decay_archive_threshold,
+			decay_min_confidence_floor=self.config.decay_min_confidence_floor,
+			decay_recent_access_grace_days=self.config.decay_recent_access_grace_days,
+		)
+
+		ctx = build_oai_context(
+			repo_root=repo_root,
+			memory_root=resolved_memory_root,
+			workspace_root=resolved_workspace_root,
+			run_folder=run_folder,
+			run_id=run_folder.name,
+			config=self.config,
+			artifact_paths=artifact_paths,
+		)
+
+		# Prepare codex options — start proxy if needed
+		codex_opts = dict(self._codex_opts)
+		proxy_started = False
+		try:
+			if self._needs_proxy and self._proxy is not None:
+				proxy_url = self._proxy.start()
+				proxy_started = True
+				codex_opts["base_url"] = proxy_url
+				logger.info(
+					"[maintain] Responses proxy started at %s", proxy_url
+				)
+
+			# Build the maintain agent (codex + write_memory only)
+			agent = self._build_maintain_agent(
+				prompt=prompt,
+				memory_root=resolved_memory_root,
+				codex_opts=codex_opts,
+				thread_opts=self._thread_opts,
+			)
+
+			# Run with retry logic (3 attempts, exponential backoff)
+			max_attempts = 3
+			last_error: Exception | None = None
+			response_text = ""
+			result = None
+			start_cost_tracking()
+
+			for attempt in range(1, max_attempts + 1):
+				try:
+					logger.info(
+						"[maintain] OAI agent attempt %d/%d (model=%s)",
+						attempt,
+						max_attempts,
+						self.config.lead_role.model,
+					)
+					result = asyncio.run(
+						Runner.run(agent, prompt, context=ctx)
+					)
+					response_text = str(
+						result.final_output or ""
+					).strip() or "(no response)"
+					break
+				except Exception as exc:
+					last_error = exc
+					error_msg = str(exc)
+					if "429" in error_msg or "rate limit" in error_msg.lower():
+						logger.warning(
+							"[maintain] Rate limited on attempt %d: %s",
+							attempt,
+							error_msg[:100],
+						)
+					elif "500" in error_msg or "503" in error_msg:
+						logger.warning(
+							"[maintain] Server error on attempt %d: %s",
+							attempt,
+							error_msg[:100],
+						)
+					elif attempt < max_attempts:
+						logger.warning(
+							"[maintain] Error on attempt %d (%s): %s",
+							attempt,
+							type(exc).__name__,
+							error_msg[:100],
+						)
+					if attempt < max_attempts:
+						wait_time = min(2**attempt, 8)
+						logger.info("[maintain] Retrying in %ds...", wait_time)
+						time.sleep(wait_time)
+
+			cost_usd = stop_cost_tracking()
+
+			if result is None:
+				raise RuntimeError(
+					f"[maintain] Failed after {max_attempts} attempts. "
+					f"Last error: {last_error}"
+				) from last_error
+
+			# Write agent response text
+			_write_text_with_newline(artifact_paths["agent_log"], response_text)
+
+			# Save agent trace from result
+			agent_trace_path = run_folder / "agent_trace.json"
+			try:
+				trace_data = result.to_input_list()
+				agent_trace_path.write_text(
+					json.dumps(trace_data, default=str, indent=2),
+					encoding="utf-8",
+				)
+			except Exception as exc:
+				logger.warning(
+					"[maintain] Failed to write agent trace: %s", exc
+				)
+				agent_trace_path.write_text("[]", encoding="utf-8")
+
+			# Validate maintain_actions artifact exists
+			actions_path = artifact_paths["maintain_actions"]
+			if not actions_path.exists():
+				raise RuntimeError(f"missing_artifact:{actions_path}")
+
+			# Parse maintain_actions report for counts
+			report = _load_json_dict_artifact(actions_path)
+			counts_field = report.get("counts")
+			counts_raw = counts_field if isinstance(counts_field, dict) else {}
+			counts = _extract_counts(
+				counts_raw,
+				{
+					"merged": ("merged",),
+					"archived": ("archived",),
+					"consolidated": ("consolidated",),
+					"decayed": ("decayed",),
+					"unchanged": ("unchanged",),
+				},
+			)
+
+			# Validate action paths are within allowed roots
+			for action in report.get("actions") or []:
+				if not isinstance(action, dict):
+					continue
+				for path_key in ("source_path", "target_path"):
+					val = action.get(path_key)
+					# LLM may return a list of paths; normalise to flat
+					# list of strings so each is validated individually.
+					paths_raw: list[str] = (
+						[str(v) for v in val]
+						if isinstance(val, list)
+						else [str(val or "").strip()]
+					)
+					for raw in paths_raw:
+						raw = raw.strip()
+						if not raw:
+							continue
+						resolved = Path(raw).resolve()
+						if not (
+							self._is_within(resolved, resolved_memory_root)
+							or self._is_within(resolved, run_folder)
+						):
+							raise RuntimeError(
+								f"maintain_action_path_outside_allowed_roots:"
+								f"{path_key}={resolved}"
+							)
+
+			# Log hot-memory path for observability
+			hot_memory_path = resolved_memory_root.parent / "hot-memory.md"
+			if hot_memory_path.exists():
+				logger.info(
+					"[maintain] Hot memory written to %s", hot_memory_path
+				)
+			else:
+				logger.info(
+					"[maintain] Hot memory not written (agent may have skipped)"
+				)
+
+			payload = {
+				"memory_root": str(resolved_memory_root),
+				"workspace_root": str(resolved_workspace_root),
+				"run_folder": str(run_folder),
+				"artifacts": {
+					key: str(path) for key, path in artifact_paths.items()
+				},
+				"counts": counts,
+				"cost_usd": cost_usd,
+			}
+			return MaintainResultContract.model_validate(payload).model_dump(
+				mode="json"
+			)
+
+		finally:
+			# Always stop the proxy if we started it
+			if proxy_started and self._proxy is not None:
+				try:
+					self._proxy.stop()
+					logger.info("[maintain] Responses proxy stopped")
+				except Exception as exc:
+					logger.warning(
+						"[maintain] Failed to stop proxy: %s", exc
 					)
