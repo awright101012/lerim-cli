@@ -242,7 +242,10 @@ class LerimOAIAgent:
 						self.config.lead_role.model,
 					)
 					result = asyncio.run(
-						Runner.run(agent, prompt, context=ctx)
+						Runner.run(
+							agent, prompt, context=ctx,
+							max_turns=30,  # sync needs ~6 steps with tool calls
+						)
 					)
 					response_text = str(
 						result.final_output or ""
@@ -531,7 +534,10 @@ class LerimOAIAgent:
 						self.config.lead_role.model,
 					)
 					result = asyncio.run(
-						Runner.run(agent, prompt, context=ctx)
+						Runner.run(
+							agent, prompt, context=ctx,
+							max_turns=50,  # maintain needs many turns for 9 steps
+						)
 					)
 					response_text = str(
 						result.final_output or ""
@@ -609,14 +615,15 @@ class LerimOAIAgent:
 				},
 			)
 
-			# Validate action paths are within allowed roots
+			# Validate action paths are within allowed roots.
+			# Allowed: memory_root, run_folder, and memory_root.parent
+			# (hot-memory.md lives at .lerim/hot-memory.md which is memory_root.parent).
+			lerim_root = resolved_memory_root.parent
 			for action in report.get("actions") or []:
 				if not isinstance(action, dict):
 					continue
 				for path_key in ("source_path", "target_path"):
 					val = action.get(path_key)
-					# LLM may return a list of paths; normalise to flat
-					# list of strings so each is validated individually.
 					paths_raw: list[str] = (
 						[str(v) for v in val]
 						if isinstance(val, list)
@@ -630,6 +637,7 @@ class LerimOAIAgent:
 						if not (
 							self._is_within(resolved, resolved_memory_root)
 							or self._is_within(resolved, run_folder)
+							or self._is_within(resolved, lerim_root)
 						):
 							raise RuntimeError(
 								f"maintain_action_path_outside_allowed_roots:"
