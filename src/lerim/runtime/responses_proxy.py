@@ -324,7 +324,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 			payload = json.loads(self.rfile.read(length).decode("utf-8"))
 			chat_payload, prior_messages = convert_request_to_chat(payload)
 
-			headers = {"Content-Type": "application/json"}
+			headers = {
+				"Content-Type": "application/json",
+				"User-Agent": "lerim/1.0",
+			}
 			if self.api_key:
 				headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -406,7 +409,12 @@ class ResponsesProxy:
 			(_ProxyHandler,),
 			{"backend_url": self._backend_url, "api_key": self._api_key},
 		)
-		self._server = ThreadingHTTPServer(("127.0.0.1", self._port), handler_class)
+		class _QuietServer(ThreadingHTTPServer):
+			"""Suppress noisy ConnectionResetError tracebacks from Codex CLI."""
+			def handle_error(self, request, client_address):
+				pass
+
+		self._server = _QuietServer(("127.0.0.1", self._port), handler_class)
 		self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 		self._thread.start()
 		return self.url

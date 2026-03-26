@@ -8,7 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ripgrep no
     rm -rf /var/lib/apt/lists/*
 
 # Install Codex CLI globally (filesystem sub-agent for the OAI agent)
-RUN npm install -g @openai/codex
+# Pin to 0.106.0 — newer versions use WebSocket transport by default
+# which doesn't work with our HTTP-only ResponsesProxy
+RUN npm install -g @openai/codex@0.106.0
 
 # Install lerim from local source
 COPY . /build
