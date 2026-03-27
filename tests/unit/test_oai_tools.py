@@ -256,7 +256,6 @@ def _call_tool(tool_func, ctx, **kwargs):
 	raw_fn = getattr(_mod, impl_name)
 	# The @function_tool wraps it; we need to call the original.
 	# Since these are simple functions, let's just replicate the logic.
-	import inspect
 	# Get the source function from the tool
 	return raw_fn.__wrapped__(mock, **kwargs) if hasattr(raw_fn, '__wrapped__') else None
 
@@ -269,7 +268,7 @@ def _call_write_report(ctx, **kwargs):
 		def __init__(self, context):
 			self.context = context
 
-	mock = _MockWrapper(ctx)
+	_MockWrapper(ctx)
 	# Direct function call — replicate what the tool does
 	file_path = kwargs["file_path"]
 	content = kwargs["content"]
@@ -296,7 +295,7 @@ def _call_read_file(ctx, **kwargs):
 		def __init__(self, context):
 			self.context = context
 
-	mock = _MockWrapper(ctx)
+	_MockWrapper(ctx)
 	file_path = kwargs["file_path"]
 	resolved = Path(file_path).resolve()
 	run_folder = ctx.run_folder
@@ -328,7 +327,7 @@ def _call_list_files(ctx, **kwargs):
 		def __init__(self, context):
 			self.context = context
 
-	mock = _MockWrapper(ctx)
+	_MockWrapper(ctx)
 	directory = kwargs["directory"]
 	pattern = kwargs.get("pattern", "*.md")
 	resolved = Path(directory).resolve()
