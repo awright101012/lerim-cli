@@ -19,12 +19,12 @@ import litellm
 litellm.turn_off_message_logging = True
 litellm.suppress_debug_info = True
 
-from agents import Agent, Runner, set_tracing_disabled
-from agents.extensions.models.litellm_model import LitellmModel
+from agents import Agent, Runner, set_tracing_disabled  # noqa: E402
+from agents.extensions.models.litellm_model import LitellmModel  # noqa: E402
 
-from lerim.config.settings import Config, get_config
-from lerim.memory.access_tracker import get_access_stats, init_access_db
-from lerim.runtime.helpers import (
+from lerim.config.settings import Config, get_config  # noqa: E402
+from lerim.memory.access_tracker import get_access_stats, init_access_db  # noqa: E402
+from lerim.runtime.helpers import (  # noqa: E402
 	MaintainResultContract,
 	SyncResultContract,
 	_build_artifact_paths,
@@ -35,10 +35,10 @@ from lerim.runtime.helpers import (
 	_write_json_artifact,
 	_write_text_with_newline,
 )
-from lerim.runtime.cost_tracker import start_cost_tracking, stop_cost_tracking
-from lerim.runtime.oai_context import OAIRuntimeContext, build_oai_context
-from lerim.runtime.oai_providers import build_oai_fallback_models, build_oai_model
-from lerim.runtime.oai_tools import (
+from lerim.runtime.cost_tracker import start_cost_tracking, stop_cost_tracking  # noqa: E402
+from lerim.runtime.oai_context import OAIRuntimeContext, build_oai_context  # noqa: E402
+from lerim.runtime.oai_providers import build_oai_fallback_models, build_oai_model  # noqa: E402
+from lerim.runtime.oai_tools import (  # noqa: E402
 	archive_memory,
 	batch_dedup_candidates,
 	edit_memory,
@@ -51,12 +51,12 @@ from lerim.runtime.oai_tools import (
 	write_memory,
 	write_report,
 )
-from lerim.runtime.prompts.oai_maintain import (
+from lerim.runtime.prompts.oai_maintain import (  # noqa: E402
 	build_oai_maintain_artifact_paths,
 	build_oai_maintain_prompt,
 )
-from lerim.runtime.prompts.oai_ask import build_oai_ask_prompt
-from lerim.runtime.prompts.oai_sync import build_oai_sync_prompt
+from lerim.runtime.prompts.oai_ask import build_oai_ask_prompt  # noqa: E402
+from lerim.runtime.prompts.oai_sync import build_oai_sync_prompt  # noqa: E402
 
 logger = logging.getLogger("lerim.runtime.oai")
 

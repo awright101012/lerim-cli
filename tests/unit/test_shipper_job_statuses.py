@@ -11,7 +11,6 @@ import sqlite3
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from lerim.app.cloud_shipper import (
 	_JOB_STATUS_MAP,
