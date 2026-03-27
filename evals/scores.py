@@ -2,10 +2,13 @@
 
 Provides EvalScore for recording per-trace eval results, composite score
 computation, and schema/field validation for extraction and summarization outputs.
+Also includes LerimBenchScore for full 7-dimension benchmark scoring with
+deterministic check functions for dedup, search (NDCG), and archive precision.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,6 +106,99 @@ def check_extraction_quality(output: list[dict]) -> dict[str, Any]:
 	}
 
 
+@dataclass
+class LerimBenchScore:
+	"""Full 7-dimension LerimBench score."""
+
+	extraction_precision: float = 0.0
+	extraction_recall: float = 0.0
+	dedup_accuracy: float = 0.0
+	consolidation_quality: float = 0.0  # LLM-as-judge
+	archive_precision: float = 0.0
+	search_relevance: float = 0.0  # NDCG@5
+	scale_degradation: float = 1.0  # ratio, 1.0 = no degradation
+
+
+def compute_lerim_bench_composite(score: LerimBenchScore) -> float:
+	"""Weighted composite: extraction_precision 0.20, extraction_recall 0.20,
+	dedup_accuracy 0.15, consolidation_quality 0.15, archive_precision 0.10,
+	search_relevance 0.15, scale_degradation 0.05."""
+	return (
+		score.extraction_precision * 0.20
+		+ score.extraction_recall * 0.20
+		+ score.dedup_accuracy * 0.15
+		+ score.consolidation_quality * 0.15
+		+ score.archive_precision * 0.10
+		+ score.search_relevance * 0.15
+		+ score.scale_degradation * 0.05
+	)
+
+
+def _fuzzy_title_match(golden_title: str, pred_title: str) -> bool:
+	"""Match titles using substring containment or keyword overlap."""
+	g = golden_title.lower().strip()
+	p = pred_title.lower().strip()
+	# Exact
+	if g == p:
+		return True
+	# Substring containment
+	if g in p or p in g:
+		return True
+	# Keyword overlap (Jaccard > 0.5)
+	g_words = set(g.split()) - {"the", "a", "an", "for", "to", "in", "of", "with", "and", "or"}
+	p_words = set(p.split()) - {"the", "a", "an", "for", "to", "in", "of", "with", "and", "or"}
+	if g_words and p_words:
+		jaccard = len(g_words & p_words) / len(g_words | p_words)
+		if jaccard > 0.5:
+			return True
+	return False
+
+
+def check_dedup_accuracy(predictions: list[dict], golden: list[dict]) -> float:
+	"""Compare predicted dedup classifications against golden assertions.
+
+	Each item has candidate_title and expected_action (add/update/no_op).
+	Uses fuzzy title matching to tolerate LLM-generated title variations.
+	"""
+	if not golden:
+		return 1.0
+	correct = 0
+	for g in golden:
+		title = g["candidate_title"]
+		expected = g["expected_action"]
+		# Find best matching prediction using fuzzy title match
+		pred = next(
+			(p for p in predictions if _fuzzy_title_match(title, p.get("candidate_title", ""))),
+			None,
+		)
+		if pred and pred.get("action") == expected:
+			correct += 1
+	return correct / len(golden)
+
+
+def compute_ndcg(ranked_results: list[str], relevant: set[str], k: int = 5) -> float:
+	"""NDCG@k for search relevance."""
+	dcg = 0.0
+	for i, result in enumerate(ranked_results[:k]):
+		rel = 1.0 if result in relevant else 0.0
+		dcg += rel / math.log2(i + 2)
+	# Ideal DCG
+	ideal_count = min(len(relevant), k)
+	idcg = sum(1.0 / math.log2(i + 2) for i in range(ideal_count))
+	return dcg / idcg if idcg > 0 else 0.0
+
+
+def check_archive_precision(
+	archived: list[str], should_archive: set[str], should_keep: set[str]
+) -> float:
+	"""Precision of archive decisions. Penalizes archiving things that should be kept."""
+	if not archived:
+		return 1.0 if not should_archive else 0.0
+	correct = sum(1 for a in archived if a in should_archive)
+	incorrect = sum(1 for a in archived if a in should_keep)
+	return correct / (correct + incorrect) if (correct + incorrect) > 0 else 0.0
+
+
 if __name__ == "__main__":
 	"""Self-test for scoring utilities."""
 	assert compute_composite(1.0, 1.0, 1.0, 1.0) == 1.0
@@ -136,4 +232,42 @@ if __name__ == "__main__":
 	score = EvalScore(trace="test.jsonl", schema_ok=True, has_candidates=True, precision=0.7)
 	assert score.trace == "test.jsonl"
 	assert score.precision == 0.7
+
+	# LerimBenchScore tests
+	bench = LerimBenchScore(
+		extraction_precision=0.9, extraction_recall=0.8, dedup_accuracy=0.85,
+		consolidation_quality=0.7, archive_precision=0.95,
+		search_relevance=0.75, scale_degradation=0.9,
+	)
+	comp = compute_lerim_bench_composite(bench)
+	expected_bench = (0.9 * 0.20 + 0.8 * 0.20 + 0.85 * 0.15 + 0.7 * 0.15
+		+ 0.95 * 0.10 + 0.75 * 0.15 + 0.9 * 0.05)
+	assert abs(comp - expected_bench) < 1e-9
+
+	# check_dedup_accuracy tests
+	golden = [
+		{"candidate_title": "A", "expected_action": "add"},
+		{"candidate_title": "B", "expected_action": "no_op"},
+	]
+	preds = [
+		{"candidate_title": "A", "action": "add"},
+		{"candidate_title": "B", "action": "add"},
+	]
+	assert abs(check_dedup_accuracy(preds, golden) - 0.5) < 1e-9
+	assert check_dedup_accuracy([], []) == 1.0
+
+	# compute_ndcg tests
+	assert abs(compute_ndcg(["a", "b", "c"], {"a", "c"}, k=5) - (
+		(1.0 / math.log2(2) + 0.0 / math.log2(3) + 1.0 / math.log2(4))
+		/ (1.0 / math.log2(2) + 1.0 / math.log2(3))
+	)) < 1e-9
+	assert compute_ndcg([], {"a"}, k=5) == 0.0
+	assert compute_ndcg(["a"], set(), k=5) == 0.0
+
+	# check_archive_precision tests
+	assert check_archive_precision(["a", "b"], {"a", "b"}, {"c"}) == 1.0
+	assert check_archive_precision(["a", "c"], {"a"}, {"c"}) == 0.5
+	assert check_archive_precision([], set(), set()) == 1.0
+	assert check_archive_precision([], {"a"}, set()) == 0.0
+
 	print("scores: self-test passed")

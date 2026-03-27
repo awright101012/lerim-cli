@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from evals.judge import _parse_agent_output, build_judge_prompt
 from evals.scores import (
     EvalScore,
+    LerimBenchScore,
+    _fuzzy_title_match,
+    check_archive_precision,
+    check_dedup_accuracy,
     check_extraction_schema,
     check_summarization_fields,
     check_word_limits,
     compute_composite,
+    compute_lerim_bench_composite,
+    compute_ndcg,
 )
 
 
@@ -139,6 +146,211 @@ def test_eval_score_construction() -> None:
     assert score.schema_ok is True
     assert score.composite == 0.0
     assert score.candidate_count == 0
+
+
+# --- LerimBenchScore ---
+
+
+def test_lerim_bench_score_defaults() -> None:
+    """LerimBenchScore defaults have sensible values."""
+    score = LerimBenchScore()
+    assert score.extraction_precision == 0.0
+    assert score.scale_degradation == 1.0
+
+
+def test_lerim_bench_composite_perfect() -> None:
+    """Perfect LerimBench score produces composite of 1.0."""
+    score = LerimBenchScore(
+        extraction_precision=1.0,
+        extraction_recall=1.0,
+        dedup_accuracy=1.0,
+        consolidation_quality=1.0,
+        archive_precision=1.0,
+        search_relevance=1.0,
+        scale_degradation=1.0,
+    )
+    assert abs(compute_lerim_bench_composite(score) - 1.0) < 1e-9
+
+
+def test_lerim_bench_composite_zero() -> None:
+    """All-zero LerimBench score produces composite of 0.0."""
+    score = LerimBenchScore(
+        extraction_precision=0.0,
+        extraction_recall=0.0,
+        dedup_accuracy=0.0,
+        consolidation_quality=0.0,
+        archive_precision=0.0,
+        search_relevance=0.0,
+        scale_degradation=0.0,
+    )
+    assert compute_lerim_bench_composite(score) == 0.0
+
+
+def test_lerim_bench_composite_weighted() -> None:
+    """LerimBench composite uses correct weights."""
+    score = LerimBenchScore(
+        extraction_precision=0.9,
+        extraction_recall=0.8,
+        dedup_accuracy=0.85,
+        consolidation_quality=0.7,
+        archive_precision=0.95,
+        search_relevance=0.75,
+        scale_degradation=0.9,
+    )
+    expected = (
+        0.9 * 0.20 + 0.8 * 0.20 + 0.85 * 0.15 + 0.7 * 0.15
+        + 0.95 * 0.10 + 0.75 * 0.15 + 0.9 * 0.05
+    )
+    assert abs(compute_lerim_bench_composite(score) - expected) < 1e-9
+
+
+# --- check_dedup_accuracy ---
+
+
+def test_dedup_accuracy_all_correct() -> None:
+    """All predictions match golden assertions."""
+    golden = [
+        {"candidate_title": "A", "expected_action": "add"},
+        {"candidate_title": "B", "expected_action": "no_op"},
+    ]
+    preds = [
+        {"candidate_title": "A", "action": "add"},
+        {"candidate_title": "B", "action": "no_op"},
+    ]
+    assert check_dedup_accuracy(preds, golden) == 1.0
+
+
+def test_dedup_accuracy_partial() -> None:
+    """Half of predictions match golden assertions."""
+    golden = [
+        {"candidate_title": "A", "expected_action": "add"},
+        {"candidate_title": "B", "expected_action": "no_op"},
+    ]
+    preds = [
+        {"candidate_title": "A", "action": "add"},
+        {"candidate_title": "B", "action": "add"},
+    ]
+    assert abs(check_dedup_accuracy(preds, golden) - 0.5) < 1e-9
+
+
+def test_dedup_accuracy_empty_golden() -> None:
+    """Empty golden returns 1.0 (nothing to check)."""
+    assert check_dedup_accuracy([], []) == 1.0
+
+
+def test_dedup_accuracy_missing_prediction() -> None:
+    """Prediction missing for a golden item counts as incorrect."""
+    golden = [{"candidate_title": "A", "expected_action": "add"}]
+    preds: list[dict] = []
+    assert check_dedup_accuracy(preds, golden) == 0.0
+
+
+def test_dedup_accuracy_substring_match() -> None:
+    """Fuzzy matching: golden title is a substring of prediction title."""
+    golden = [{"candidate_title": "Use JWT", "expected_action": "add"}]
+    preds = [{"candidate_title": "Use JWT with HS256 for auth", "action": "add"}]
+    assert check_dedup_accuracy(preds, golden) == 1.0
+
+
+def test_dedup_accuracy_keyword_overlap_match() -> None:
+    """Fuzzy matching: keyword overlap (Jaccard > 0.5) matches."""
+    golden = [{"candidate_title": "JWT token refresh strategy", "expected_action": "add"}]
+    preds = [{"candidate_title": "JWT refresh token handling", "action": "add"}]
+    assert check_dedup_accuracy(preds, golden) == 1.0
+
+
+def test_dedup_accuracy_no_fuzzy_match() -> None:
+    """Fuzzy matching: completely different titles do not match."""
+    golden = [{"candidate_title": "Database migration", "expected_action": "add"}]
+    preds = [{"candidate_title": "Frontend styling", "action": "add"}]
+    assert check_dedup_accuracy(preds, golden) == 0.0
+
+
+# --- _fuzzy_title_match ---
+
+
+def test_fuzzy_title_match_exact() -> None:
+    """Exact match returns True."""
+    assert _fuzzy_title_match("Use JWT", "Use JWT")
+
+
+def test_fuzzy_title_match_substring() -> None:
+    """Substring containment returns True."""
+    assert _fuzzy_title_match("Use JWT", "Use JWT with HS256 for auth")
+
+
+def test_fuzzy_title_match_keyword_overlap() -> None:
+    """Keyword Jaccard > 0.5 returns True."""
+    assert _fuzzy_title_match("JWT token refresh strategy", "JWT refresh token handling")
+
+
+def test_fuzzy_title_match_no_match() -> None:
+    """Completely different titles return False."""
+    assert not _fuzzy_title_match("Database migration", "Frontend styling")
+
+
+# --- compute_ndcg ---
+
+
+def test_ndcg_perfect_ranking() -> None:
+    """Perfect ranking produces NDCG of 1.0."""
+    assert abs(compute_ndcg(["a", "b"], {"a", "b"}, k=5) - 1.0) < 1e-9
+
+
+def test_ndcg_no_relevant() -> None:
+    """No relevant items in results produces NDCG of 0.0."""
+    assert compute_ndcg(["a", "b"], set(), k=5) == 0.0
+
+
+def test_ndcg_empty_results() -> None:
+    """Empty results with relevant set produces NDCG of 0.0."""
+    assert compute_ndcg([], {"a"}, k=5) == 0.0
+
+
+def test_ndcg_partial_ranking() -> None:
+    """Partial match computes correct NDCG."""
+    ranked = ["a", "b", "c"]
+    relevant = {"a", "c"}
+    dcg = 1.0 / math.log2(2) + 0.0 / math.log2(3) + 1.0 / math.log2(4)
+    idcg = 1.0 / math.log2(2) + 1.0 / math.log2(3)
+    expected = dcg / idcg
+    assert abs(compute_ndcg(ranked, relevant, k=5) - expected) < 1e-9
+
+
+def test_ndcg_respects_k() -> None:
+    """Only first k results are considered."""
+    ranked = ["x", "a", "b"]
+    relevant = {"a", "b"}
+    # k=1: only "x" considered, which is not relevant
+    assert compute_ndcg(ranked, relevant, k=1) == 0.0
+
+
+# --- check_archive_precision ---
+
+
+def test_archive_precision_all_correct() -> None:
+    """All archived items are in should_archive set."""
+    assert check_archive_precision(["a", "b"], {"a", "b"}, {"c"}) == 1.0
+
+
+def test_archive_precision_half_wrong() -> None:
+    """Half of archived items are wrong (in should_keep)."""
+    assert check_archive_precision(["a", "c"], {"a"}, {"c"}) == 0.5
+
+
+def test_archive_precision_nothing_archived_nothing_expected() -> None:
+    """Nothing archived when nothing should be archived is correct."""
+    assert check_archive_precision([], set(), set()) == 1.0
+
+
+def test_archive_precision_nothing_archived_should_have() -> None:
+    """Nothing archived when items should have been archived scores 0."""
+    assert check_archive_precision([], {"a"}, set()) == 0.0
+
+
+def test_archive_precision_all_wrong() -> None:
+    """All archived items are in should_keep."""
+    assert check_archive_precision(["x", "y"], set(), {"x", "y"}) == 0.0
 
 
 # --- _parse_agent_output ---
