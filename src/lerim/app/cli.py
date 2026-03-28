@@ -1088,7 +1088,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     )
     daemon_thread.start()
 
-    def _shutdown(signum: int, frame: Any) -> None:
+    def _shutdown(_signum: int, _frame: Any) -> None:
         """Signal handler — just set the stop flag (no lock-acquiring calls)."""
         stop_event.set()
 
