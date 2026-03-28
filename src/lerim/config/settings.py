@@ -419,8 +419,11 @@ def _build_llm_role(
     raw: dict[str, Any], *, default_provider: str, default_model: str
 ) -> LLMRoleConfig:
     """Build one orchestration role config from TOML payload."""
+    from lerim.runtime.provider_caps import normalize_model_name
+
     provider = _to_non_empty_string(raw.get("provider")) or default_provider
     model = _to_non_empty_string(raw.get("model")) or default_model
+    model = normalize_model_name(provider, model)
     return LLMRoleConfig(
         provider=provider,
         model=model,
@@ -444,8 +447,11 @@ def _build_dspy_role(
     raw: dict[str, Any], *, default_provider: str, default_model: str
 ) -> DSPyRoleConfig:
     """Build one DSPy role config from TOML payload."""
+    from lerim.runtime.provider_caps import normalize_model_name
+
     provider = _to_non_empty_string(raw.get("provider")) or default_provider
     model = _to_non_empty_string(raw.get("model")) or default_model
+    model = normalize_model_name(provider, model)
     return DSPyRoleConfig(
         provider=provider,
         model=model,
