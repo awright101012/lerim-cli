@@ -8,17 +8,19 @@ from pathlib import Path
 
 from evals.judge import _parse_agent_output, build_judge_prompt
 from evals.scores import (
-    EvalScore,
-    LerimBenchScore,
-    _fuzzy_title_match,
-    check_archive_precision,
-    check_dedup_accuracy,
-    check_extraction_schema,
-    check_summarization_fields,
-    check_word_limits,
-    compute_composite,
-    compute_lerim_bench_composite,
-    compute_ndcg,
+	EvalScore,
+	LerimBenchScore,
+	_fuzzy_title_match,
+	check_archive_precision,
+	check_dedup_accuracy,
+	check_extraction_assertions,
+	check_extraction_schema,
+	check_summarization_assertions,
+	check_summarization_fields,
+	check_word_limits,
+	compute_composite,
+	compute_lerim_bench_composite,
+	compute_ndcg,
 )
 
 
@@ -430,3 +432,183 @@ def test_build_judge_prompt(tmp_path: Path) -> None:
     result = build_judge_prompt(template, Path("/tmp/trace.jsonl"), '{"data": 1}')
     assert "/tmp/trace.jsonl" in result
     assert '{"data": 1}' in result
+
+
+# --- check_extraction_assertions ---
+
+
+def test_extraction_assertions_all_found() -> None:
+	"""All must_extract items match -> recall 1.0."""
+	output = [
+		{"title": "Use JWT tokens", "body": "Auth uses JWT with HS256"},
+		{"title": "Deploy to AWS", "body": "Production on ECS"},
+	]
+	assertions = {
+		"must_extract": [
+			{"title_contains": "jwt", "body_contains": "hs256"},
+			{"title_contains": "deploy"},
+		],
+	}
+	result = check_extraction_assertions(output, assertions)
+	assert result["recall"] == 1.0
+	assert result["score"] == 1.0
+
+
+def test_extraction_assertions_partial() -> None:
+	"""1 of 2 must_extract items match -> recall 0.5."""
+	output = [{"title": "Use JWT tokens", "body": "token auth"}]
+	assertions = {
+		"must_extract": [
+			{"title_contains": "jwt"},
+			{"title_contains": "deploy"},
+		],
+	}
+	result = check_extraction_assertions(output, assertions)
+	assert result["recall"] == 0.5
+
+
+def test_extraction_assertions_none_found() -> None:
+	"""0 must_extract items match -> recall 0.0."""
+	output = [{"title": "Unrelated item", "body": "nothing here"}]
+	assertions = {
+		"must_extract": [
+			{"title_contains": "jwt"},
+			{"title_contains": "deploy"},
+		],
+	}
+	result = check_extraction_assertions(output, assertions)
+	assert result["recall"] == 0.0
+	assert result["score"] == 0.0
+
+
+def test_extraction_assertions_violation() -> None:
+	"""must_not_extract item found -> penalty > 0."""
+	output = [
+		{"title": "Use JWT tokens", "body": "auth"},
+		{"title": "Database schema", "body": "tables"},
+	]
+	assertions = {
+		"must_not_extract": [{"title_contains": "database"}],
+	}
+	result = check_extraction_assertions(output, assertions)
+	assert result["precision_penalty"] > 0.0
+	# penalty = 1 violation / 2 items = 0.5
+	assert result["precision_penalty"] == 0.5
+
+
+def test_extraction_assertions_bounds_ok() -> None:
+	"""Within min/max -> bounds_ok True."""
+	output = [
+		{"title": "A", "body": "a"},
+		{"title": "B", "body": "b"},
+	]
+	assertions = {"min_candidates": 1, "max_candidates": 5}
+	result = check_extraction_assertions(output, assertions)
+	assert result["bounds_ok"] is True
+
+
+def test_extraction_assertions_bounds_exceeded() -> None:
+	"""Exceeds max -> bounds_ok False, score reduced by 20%."""
+	output = [
+		{"title": "A", "body": "a"},
+		{"title": "B", "body": "b"},
+		{"title": "C", "body": "c"},
+	]
+	assertions = {
+		"must_extract": [{"title_contains": "a"}],
+		"max_candidates": 2,
+	}
+	result = check_extraction_assertions(output, assertions)
+	assert result["bounds_ok"] is False
+	# recall = 1/1 = 1.0, penalty = 0, but bounds penalty -> score = 1.0 * 0.8
+	assert abs(result["score"] - 0.8) < 1e-9
+
+
+def test_extraction_assertions_empty() -> None:
+	"""No assertions -> score 1.0."""
+	result = check_extraction_assertions([], {})
+	assert result["score"] == 1.0
+	assert result["recall"] == 1.0
+	assert result["bounds_ok"] is True
+
+
+# --- check_summarization_assertions ---
+
+
+def test_summarization_assertions_all_pass() -> None:
+	"""All fields, limits, content -> score 1.0."""
+	output = {
+		"title": "JWT Auth Setup",
+		"description": "Setting up authentication",
+		"user_intent": "implement auth",
+		"session_narrative": "The user worked on auth",
+		"coding_agent": "claude",
+	}
+	assertions = {
+		"must_contain_fields": ["title", "description", "coding_agent"],
+		"max_narrative_words": 50,
+		"max_intent_words": 20,
+		"title_contains": "jwt",
+		"coding_agent": "claude",
+	}
+	result = check_summarization_assertions(output, assertions)
+	assert result["fields_ok"] is True
+	assert result["limits_ok"] is True
+	assert result["content_score"] == 1.0
+	assert result["score"] == 1.0
+
+
+def test_summarization_assertions_missing_field() -> None:
+	"""Missing required field -> fields_ok False."""
+	output = {
+		"title": "JWT Auth",
+		"user_intent": "auth",
+		"session_narrative": "worked on it",
+	}
+	assertions = {
+		"must_contain_fields": ["title", "description"],
+	}
+	result = check_summarization_assertions(output, assertions)
+	assert result["fields_ok"] is False
+	# score should be reduced (multiplied by 0.5 instead of 1.0)
+	assert result["score"] == 0.5
+
+
+def test_summarization_assertions_word_limit_exceeded() -> None:
+	"""Narrative too long -> limits_ok False."""
+	output = {
+		"title": "Test",
+		"session_narrative": "word " * 100,
+		"user_intent": "short",
+	}
+	assertions = {
+		"max_narrative_words": 10,
+	}
+	result = check_summarization_assertions(output, assertions)
+	assert result["limits_ok"] is False
+	# score multiplied by 0.8 for limits violation
+	assert abs(result["score"] - 0.8) < 1e-9
+
+
+def test_summarization_assertions_content_mismatch() -> None:
+	"""Title doesn't contain expected substring -> content_score 0."""
+	output = {
+		"title": "Database Migration",
+		"session_narrative": "worked on db",
+		"user_intent": "migrate",
+	}
+	assertions = {
+		"title_contains": "jwt",
+	}
+	result = check_summarization_assertions(output, assertions)
+	assert result["content_score"] == 0.0
+	assert result["score"] == 0.0
+
+
+def test_summarization_assertions_empty_output() -> None:
+	"""Not a dict -> score 0.0."""
+	result = check_summarization_assertions("not a dict", {})
+	assert result["fields_ok"] is False
+	assert result["limits_ok"] is False
+	assert result["content_score"] == 0.0
+	assert result["score"] == 0.0

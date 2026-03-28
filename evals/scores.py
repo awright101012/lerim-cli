@@ -199,6 +199,106 @@ def check_archive_precision(
 	return correct / (correct + incorrect) if (correct + incorrect) > 0 else 0.0
 
 
+def check_extraction_assertions(output: list[dict], assertions: dict) -> dict[str, float]:
+	"""Score extraction output against golden assertions.
+
+	Checks must_extract items via case-insensitive substring matching on
+	title_contains and body_contains. Checks must_not_extract for precision
+	penalties. Validates min/max_candidates bounds.
+
+	Returns {"recall": float, "precision_penalty": float, "bounds_ok": bool, "score": float}.
+	"""
+	must_extract = assertions.get("must_extract", [])
+	must_not_extract = assertions.get("must_not_extract", [])
+	min_candidates = assertions.get("min_candidates", 0)
+	max_candidates = assertions.get("max_candidates", 999)
+
+	# Recall: how many must_extract items were found
+	hits = 0
+	for expected in must_extract:
+		title_pat = expected.get("title_contains", "").lower()
+		body_pat = expected.get("body_contains", "").lower()
+		for item in output:
+			title = str(item.get("title", "")).lower()
+			body = str(item.get("body", "")).lower()
+			title_match = title_pat in title if title_pat else True
+			body_match = body_pat in body if body_pat else True
+			if title_match and body_match:
+				hits += 1
+				break
+	recall = hits / len(must_extract) if must_extract else 1.0
+
+	# Precision penalty: how many must_not_extract items were found
+	violations = 0
+	for forbidden in must_not_extract:
+		title_pat = forbidden.get("title_contains", "").lower()
+		for item in output:
+			title = str(item.get("title", "")).lower()
+			if title_pat and title_pat in title:
+				violations += 1
+				break
+	penalty = violations / len(output) if output else 0.0
+
+	# Bounds check
+	bounds_ok = min_candidates <= len(output) <= max_candidates
+
+	# Composite score
+	score = recall * (1.0 - penalty)
+	if not bounds_ok:
+		score *= 0.8  # 20% penalty for out-of-bounds candidate count
+
+	return {
+		"recall": round(recall, 4),
+		"precision_penalty": round(penalty, 4),
+		"bounds_ok": bounds_ok,
+		"score": round(score, 4),
+	}
+
+
+def check_summarization_assertions(output: dict, assertions: dict) -> dict[str, float]:
+	"""Score summary output against golden assertions.
+
+	Checks required fields present, word limits, content substring matches.
+	Returns {"fields_ok": bool, "limits_ok": bool, "content_score": float, "score": float}.
+	"""
+	if not isinstance(output, dict):
+		return {"fields_ok": False, "limits_ok": False, "content_score": 0.0, "score": 0.0}
+
+	# Fields check
+	must_fields = assertions.get("must_contain_fields", [])
+	fields_ok = all(output.get(f) for f in must_fields) if must_fields else True
+
+	# Word limits
+	max_narrative = assertions.get("max_narrative_words", 999)
+	max_intent = assertions.get("max_intent_words", 999)
+	narrative_words = len(str(output.get("session_narrative", "")).split())
+	intent_words = len(str(output.get("user_intent", "")).split())
+	limits_ok = narrative_words <= max_narrative and intent_words <= max_intent
+
+	# Content checks (substring matching)
+	content_checks = 0
+	content_total = 0
+	for key in ("title_contains", "coding_agent"):
+		expected = assertions.get(key)
+		if expected:
+			content_total += 1
+			actual_key = "title" if key == "title_contains" else "coding_agent"
+			actual = str(output.get(actual_key, "")).lower()
+			if expected.lower() in actual:
+				content_checks += 1
+	content_score = content_checks / content_total if content_total else 1.0
+
+	# Composite
+	score = (1.0 if fields_ok else 0.5) * (1.0 if limits_ok else 0.8) * content_score
+
+	return {
+		"fields_ok": fields_ok,
+		"limits_ok": limits_ok,
+		"content_score": round(content_score, 4),
+		"score": round(score, 4),
+	}
+
+
 if __name__ == "__main__":
 	"""Self-test for scoring utilities."""
 	assert compute_composite(1.0, 1.0, 1.0, 1.0) == 1.0
@@ -269,5 +369,59 @@ if __name__ == "__main__":
 	assert check_archive_precision(["a", "c"], {"a"}, {"c"}) == 0.5
 	assert check_archive_precision([], set(), set()) == 1.0
 	assert check_archive_precision([], {"a"}, set()) == 0.0
+
+	# check_extraction_assertions tests
+	ext_output = [
+		{"title": "Use JWT tokens", "body": "Auth uses JWT with HS256"},
+		{"title": "Deploy to AWS", "body": "Production on ECS"},
+	]
+	ext_assertions = {
+		"must_extract": [
+			{"title_contains": "jwt", "body_contains": "hs256"},
+			{"title_contains": "deploy"},
+		],
+		"must_not_extract": [{"title_contains": "database"}],
+		"min_candidates": 1,
+		"max_candidates": 5,
+	}
+	ext_result = check_extraction_assertions(ext_output, ext_assertions)
+	assert ext_result["recall"] == 1.0
+	assert ext_result["precision_penalty"] == 0.0
+	assert ext_result["bounds_ok"] is True
+	assert ext_result["score"] == 1.0
+
+	# Partial recall
+	ext_partial = check_extraction_assertions(
+		[{"title": "Use JWT", "body": "token auth"}],
+		{"must_extract": [{"title_contains": "jwt"}, {"title_contains": "deploy"}]},
+	)
+	assert ext_partial["recall"] == 0.5
+
+	# Empty assertions
+	assert check_extraction_assertions([], {})["score"] == 1.0
+
+	# check_summarization_assertions tests
+	sum_output = {
+		"title": "JWT Auth Setup",
+		"description": "Setting up authentication",
+		"user_intent": "implement auth",
+		"session_narrative": "The user worked on auth",
+		"coding_agent": "claude",
+	}
+	sum_assertions = {
+		"must_contain_fields": ["title", "description", "coding_agent"],
+		"max_narrative_words": 50,
+		"max_intent_words": 20,
+		"title_contains": "jwt",
+		"coding_agent": "claude",
+	}
+	sum_result = check_summarization_assertions(sum_output, sum_assertions)
+	assert sum_result["fields_ok"] is True
+	assert sum_result["limits_ok"] is True
+	assert sum_result["content_score"] == 1.0
+	assert sum_result["score"] == 1.0
+
+	# Non-dict input
+	assert check_summarization_assertions("not a dict", {})["score"] == 0.0
 
 	print("scores: self-test passed")
