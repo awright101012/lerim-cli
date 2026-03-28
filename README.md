@@ -58,7 +58,7 @@ Lerim is file-first and primitive-first.
 - Project memory: `<repo>/.lerim/`
 - Global fallback: `~/.lerim/`
 - Search: file-based (no index required)
-- Orchestration: OpenAI Agents SDK (`LerimOAIAgent`) with per-flow tools; non-OpenAI providers use `ResponsesProxy` + LiteLLM on the lead path
+- Orchestration: OpenAI Agents SDK (`LerimOAIAgent`) with per-flow tools; non-OpenAI providers via LiteLLM
 - Extraction/summarization: DSPy pipelines with transcript windowing
 
 ### Sync path
@@ -142,18 +142,39 @@ lerim project add .            # add current project (repeat for other repos)
 
 ### 3. Set API keys
 
-Set keys for whatever you configure under `[roles.*]`. The shipped `default.toml`
-often uses **OpenCode Go** for roles — in that case set `OPENCODE_API_KEY` (see
-[model roles](https://docs.lerim.dev/configuration/model-roles/)). If you switch
-to MiniMax, Z.AI, OpenRouter, etc., set the matching env vars instead.
+Create a `.env` file in your project root (or any parent directory):
 
 ```bash
-export OPENCODE_API_KEY="..."   # when using provider opencode_go (common default)
-# export MINIMAX_API_KEY="..."  # if roles use minimax
-# export ZAI_API_KEY="..."      # if you add zai as fallback
+# .env (in your project root or home directory)
+OPENCODE_API_KEY=your-key-here
 ```
 
-You only need keys for providers referenced in your `[roles.*]` config.
+Lerim uses [OpenCode Go](https://opencode.ai) as the default provider (free tier).
+`lerim up` automatically loads `.env` via python-dotenv and passes keys to Docker.
+
+**Alternative providers** — set the matching key and update `~/.lerim/config.toml`:
+
+| Provider | Env var | Config `provider =` |
+|----------|---------|-------------------|
+| OpenCode Go (default) | `OPENCODE_API_KEY` | `"opencode_go"` |
+| MiniMax | `MINIMAX_API_KEY` | `"minimax"` |
+| Z.AI | `ZAI_API_KEY` | `"zai"` |
+| OpenRouter | `OPENROUTER_API_KEY` | `"openrouter"` |
+| OpenAI | `OPENAI_API_KEY` | `"openai"` |
+| Ollama (local) | — | `"ollama"` |
+
+**Fallback providers** — if the primary provider hits rate limits, Lerim automatically
+falls back. Configure in `~/.lerim/config.toml`:
+
+```toml
+[roles.lead]
+provider = "opencode_go"
+model = "minimax-m2.5"
+fallback_models = ["minimax:minimax-m2.5", "zai:glm-4.7"]
+```
+
+You only need API keys for providers referenced in your `[roles.*]` config and
+`fallback_models`.
 
 ### 4. Start Lerim
 
