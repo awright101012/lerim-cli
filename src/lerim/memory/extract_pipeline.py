@@ -1,11 +1,12 @@
-"""Extraction pipeline for session transcripts using Predict + windowing.
+"""Extraction pipeline for session transcripts using DSPy modules + windowing.
 
-session file (.jsonl/.json) -> read text -> window (if needed) -> dspy.Predict
--> concat candidates from all windows.
+session file (.jsonl/.json) -> read text -> window (if needed) -> dspy.ChainOfThought
+-> deterministic pre-filter -> LLM consolidation -> LLM quality gate.
 
 Traces are compacted by adapters (tool outputs stripped), so most traces fit in a
-single window. Windowing is a fallback for unusually large sessions. No merge or
-deduplication — the downstream maintain path handles that.
+single window. Windowing is a fallback for unusually large sessions. Post-extraction,
+an LLM consolidation pass merges semantic duplicates across windows, and a quality
+gate drops low-value candidates before the sync agent sees them.
 
 When max_workers > 1, windows are processed in parallel via ThreadPoolExecutor.
 Each thread gets its own DSPy LM instances for thread safety.
@@ -44,41 +45,91 @@ from lerim.sessions import catalog as session_db
 class MemoryExtractSignature(dspy.Signature):
     """Extract reusable memory candidates from this coding-agent session transcript.
 
+    HARD GATE — ask for EVERY candidate before including it:
+    "If an agent read this memory at the start of a future session on this project,
+    would it CONCRETELY change a decision the agent makes?"
+    If the answer is "no" or "probably not" — do NOT extract it.
+
     THE FUTURE-SELF TEST: Only extract items that would help the user or their
     coding agent in a FUTURE session. If the information is obtainable by reading
     the codebase, git log, or documentation, do NOT extract it.
 
     DO NOT EXTRACT:
-    - Facts the assistant learned by READING code, configs, or docs (these are code-derivable).
-      Example: "The default port is 8765" or "The pipeline uses DSPy Predict" — just reporting what exists.
-    - Generic industry knowledge or benchmarks the user did NOT specifically request
-    - Ephemeral task details (specific slide edits, line-number fixes, PR comments, TODO items)
-    - Items where the body merely restates the title
-    - Version-specific changelogs or release notes (git log has these)
-    - Raw web search results that were not synthesized into a conclusion or decision
+    - Facts the assistant learned by READING code, configs, or docs (code-derivable).
+    - Implementation details that will be visible in the codebase once committed
+      (config values, timeout numbers, CLI commands, tool settings, hook args).
+    - Generic programming practices any senior developer with 5+ years already knows:
+      debouncing, caching, pagination, client-side vs server-side filtering, URL state
+      management, REST conventions, "keep it simple". If a senior dev wouldn't need
+      to be told this → skip.
+    - Bug reports: specific defects, crashes, or error conditions that will be fixed in code.
+      A bug is NOT friction. Friction persists structurally; a bug gets a fix.
+      Test: "After this bug is fixed, is this memory still useful?" If no → skip.
+    - Directives, tasks, or TODO items: "run X", "do Y next", "we should Z later".
+      A decision records WHY something was chosen; a directive records WHAT to do next.
+      Test: "Does this explain a choice with rationale, or just say what to do?" If latter → skip.
+    - Items where the body merely restates the title without adding WHY or HOW.
+    - Observations that are self-evident or tautological ("keep high-value items",
+      "archive low-value items", "merge duplicates into one").
+    - Architecture or workflow descriptions ("the pipeline has 6 steps",
+      "extraction runs via DSPy") — these describe WHAT exists, not WHY.
+    - Specific numbers that will change soon (eval scores, trace counts,
+      timeout values, weight coefficients) unless the RATIONALE is the point.
+    - Version-specific changelogs or release notes (git log has these).
+    - Raw web search results that were not synthesized into a conclusion.
 
     EXTRACT (high-value items only):
     - Decisions: choices about how to build, structure, or design things — by the user OR by the
       agent during implementation. If the agent chose an approach and the user didn't object, that
-      is a team decision worth remembering. Includes strategic, product, and business decisions,
-      not just code decisions.
+      is a team decision worth remembering. Includes strategic, product, and business decisions.
     - Preferences: coding style, tool preferences, workflow habits (usually user-originated)
     - Hard-won insights: non-obvious lessons learned through debugging or painful experience
     - Friction: recurring blockers, time-wasters, tool failures worth remembering
     - Pitfalls: mistakes to avoid that are NOT obvious from reading the code
     - Procedures: multi-step workarounds that would otherwise be forgotten
-    - Research conclusions: when the user explicitly requested research on a topic and the session
-      produced synthesized findings that inform project direction. Extract the conclusion, not the
-      raw data.
+    - Research conclusions: when the user explicitly requested research and the session
+      produced synthesized findings that inform project direction.
 
     EXAMPLES — extract vs skip:
-    ✓ Agent: "I'll use SQLite for the session catalog" → decision (agent CHOSE an approach)
-    ✓ User: "use tabs for indentation" → preference (user STATED)
-    ✓ Agent: "vllm-mlx crashes with concurrent Metal requests" → pitfall (DISCOVERED through debugging)
-    ✓ User asked to research pitch deck structure → agent synthesized: "Best decks follow problem-solution-traction-ask arc" → insight (RESEARCHED and CONCLUDED for this project)
-    ✗ Agent: "The config file has sync_interval = 10" → just REPORTED a config value
-    ✗ Agent: "The extraction pipeline uses DSPy Predict" → just DESCRIBED existing code
-    ✗ Agent: "B2B SaaS typically converts at 5-7%" → UNSOLICITED generic statistic, not tied to a user question
+    ✓ "Use SQLite for the session catalog" → decision (agent CHOSE an approach, WHY matters)
+    ✓ "use tabs for indentation" → preference (user STATED)
+    ✓ "vllm-mlx crashes with concurrent Metal requests" → pitfall (DISCOVERED through debugging)
+    ✓ "Restrictive extraction rules always backfire — 5 experiments ALL regressed" → insight (QUANTIFIED and NON-OBVIOUS)
+    ✓ "don't mock the database in tests" → preference. WHY: mocked tests passed but prod migration failed.
+    ✗ "The config file has sync_interval = 10" → REPORTED a config value (code-derivable)
+    ✗ "The extraction pipeline uses DSPy Predict" → DESCRIBED existing code (code-derivable)
+    ✗ "B2B SaaS typically converts at 5-7%" → UNSOLICITED generic statistic
+    ✗ "Debounce search input by 300ms" → IMPLEMENTATION DETAIL readable from code
+    ✗ "Pre-commit hook needs --hook-type pre-push" → TOOL CONFIG, belongs in docs
+    ✗ "Use timeout 2400 for eval with 327 traces" → EPHEMERAL NUMBERS that will change
+    ✗ "Eval formula v1 was wrong" → DEAD CODE, v1 no longer exists
+    ✗ "Accept empty cross-session analysis" → OBVIOUS, wouldn't change any behavior
+    ✗ "Merge duplicate topics into comprehensive target" → GENERIC ADVICE, title says it all
+    ✗ "Sync workflow processes sessions in 6 steps" → ARCHITECTURE DESCRIPTION, code has this
+    ✗ "Runner times out at 900 seconds" → BUG REPORT, will be fixed in code
+    ✗ "Scorer returns 0.0 for valid inputs" → BUG REPORT, one-time defect
+    ✗ "Run 10 hours of optimization rounds" → DIRECTIVE/TODO, not a decision or learning
+    ✗ "Use client-side filtering for small datasets" → GENERIC, any senior dev knows this
+    ✗ "Store filter state in URL search params" → GENERIC, standard web pattern
+    ✗ "Use simple solutions by default" → GENERIC, truism with no project specificity
+    ✓ "LLMs over-constrain with restrictive rules — 5 experiments all regressed" → FRICTION, structural and recurring
+
+    QUALITY BAR for each candidate:
+    - Actionable: MUST change how an agent behaves in a future session. This is non-negotiable.
+    - Atomic: ONE decision or learning per candidate. Don't bundle multiple items.
+    - Context-independent: understandable without the original conversation.
+    - Structured body: the body must add information NOT present in the title.
+      Lead with the rule/fact, then WHY (what would go wrong otherwise?),
+      then HOW TO APPLY (a concrete action for future sessions).
+      HOW TO APPLY must describe a DIFFERENT action than the title statement.
+      If it would just restate the title, omit HOW TO APPLY entirely.
+      Target: 2-4 sentences. Focus on the non-obvious WHY.
+    - Durable: still relevant weeks or months later, not tied to a specific moment.
+
+    DECISION vs LEARNING test:
+    - Decision: "We chose X because Y." Someone MADE A CHOICE between alternatives.
+    - Learning: "We discovered/observed X." Someone LEARNED SOMETHING.
+    Test: "Was there a moment of choosing?" → decision. "A moment of discovering?" → learning.
 
     Kind (for learnings only):
     - insight: a reusable observation or pattern
@@ -93,10 +144,24 @@ class MemoryExtractSignature(dspy.Signature):
     - Those subtype names belong in the kind field only when primitive is "learning".
 
     Confidence calibration:
-    - 0.9+ = explicitly stated or decided (by user or agent)
-    - 0.7-0.8 = strongly implied by behavior or accepted without objection
-    - 0.5-0.6 = inferred, uncertain
-    - Below 0.5 = do not extract
+    - 0.9+ = the user or agent EXPLICITLY stated this verbatim using clear language
+             like "I decided", "always use", "never do". Direct quotes only.
+             MAXIMUM 1 candidate per session at 0.9+. If you have more, demote all but the strongest.
+    - 0.75-0.85 = strongly implied by consistent behavior across MULTIPLE turns,
+                   or agent chose and user accepted without objection.
+    - 0.55-0.70 = inferred from a single turn. Reasonable interpretation but unconfirmed.
+    - 0.3-0.5 = weak signal. Only extract if highly unusual or novel.
+    - Below 0.3 = do not extract.
+    SELF-CHECK: After generating candidates, re-read each and ask:
+    1. "Would a senior dev with 5+ years need to be told this?" If no → remove it entirely.
+    2. "Is this specific to THIS project or general engineering?" If general → remove.
+    3. If more than 50% of candidates are 0.8+ confidence, demote each by 0.10.
+
+    Durability calibration:
+    - permanent: user preferences, identity, and convictions (about the person)
+    - project: architecture decisions with rationale NOT in code (the WHY behind a choice)
+    - session: specific numbers, eval results, current scores, version-specific bugs,
+      tool config values, CLI commands (things about THIS moment)
 
     Prefer precision over recall. Fewer high-quality items beat many weak ones.
     If a session has no durable memories, return an empty list: [].
@@ -144,8 +209,8 @@ def _filter_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
         confidence = item.get("confidence")
         durability = str(item.get("durability") or "project")
 
-        # Gate 1: Drop low-confidence (< 0.5)
-        if isinstance(confidence, (int, float)) and confidence < 0.5:
+        # Gate 1: Drop low-confidence (< 0.3)
+        if isinstance(confidence, (int, float)) and confidence < 0.3:
             continue
         # Gate 2: Title too short (< 10 chars)
         if len(title) < 10:
@@ -159,9 +224,215 @@ def _filter_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
         # Gate 5: Session-durability items dropped
         if durability == "session":
             continue
+        # Gate 6: Learnings must carry a valid kind
+        primitive = str(item.get("primitive") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        if primitive == "learning" and kind not in {
+            "insight", "procedure", "friction", "pitfall", "preference"
+        }:
+            continue
+
+        # Normalize tags: lowercase, hyphenated, deduplicated.
+        tags = item.get("tags", [])
+        if isinstance(tags, list):
+            item["tags"] = sorted(set(
+                t.strip().lower().replace(" ", "-")
+                for t in tags if t and t.strip()
+            ))
 
         filtered.append(item)
     return filtered
+
+
+class ConsolidateCandidatesSignature(dspy.Signature):
+	"""Merge near-duplicate memory candidates extracted from overlapping transcript windows.
+
+	You receive candidates from overlapping windows of the SAME session. Adjacent
+	windows share ~20% text overlap, so the same insight may appear in different
+	wording across windows.
+
+	For each group of semantic duplicates:
+	- Keep the version with the richest, most structured body (WHY + HOW TO APPLY)
+	- Use the highest confidence score from the group
+	- Union all tags from duplicates
+	- If source_speaker differs across duplicates, use "both"
+	- If durability differs, keep the more durable (permanent > project > session)
+	- Preserve the most specific title
+
+	Candidates covering DIFFERENT topics must remain separate — do not merge
+	unrelated items. If no duplicates exist, return the input unchanged.
+	"""
+
+	candidates: list[MemoryCandidate] = dspy.InputField(
+		desc="All memory candidates extracted from overlapping transcript windows of one session",
+	)
+	unique_candidates: list[MemoryCandidate] = dspy.OutputField(
+		desc="Deduplicated set — duplicates merged, unique items unchanged. Same MemoryCandidate schema.",
+	)
+
+
+class QualityGateSignature(dspy.Signature):
+	"""Filter memory candidates to keep only high-quality, durable items worth persisting.
+
+	HARD GATES (fail ANY one → DROP immediately):
+	- NOT actionable: would not concretely change how an agent behaves in a future session.
+	  Ask: "What would an agent do DIFFERENTLY after reading this?" If no clear answer → DROP.
+	- Code-derivable: the information exists in the codebase, git log, docs, or config files.
+	- Generic knowledge: any senior developer with 5+ years already knows this.
+	  MUST drop: general UX patterns (debouncing, pagination, caching), basic architecture
+	  choices (client vs server filtering), standard web patterns (URL state), truisms
+	  ("keep it simple", "prefer simple solutions").
+	- Self-evident / tautological: the observation is obvious and the body just restates the title.
+	- Bug report: describes a specific defect, crash, or error that will be fixed.
+	  Test: "After someone fixes this, is the memory still useful?" If no → DROP.
+	- Directive / TODO: tells the agent what to do next rather than capturing a decision or learning.
+
+	SOFT CRITERIA (fail 2+ → DROP):
+	1. Atomic: covers ONE decision or learning, not bundled
+	2. Context-independent: understandable without the original conversation
+	3. Structured body: adds WHY and HOW beyond what the title says
+	4. Durable: still relevant weeks or months later, not tied to specific numbers or versions
+	5. Information-dense: body adds substance, not just rephrasing the title
+
+	DROP examples:
+	- "Debounce search input by 300ms" → code-derivable config value
+	- "Accept empty cross-session analysis" → self-evident, changes nothing
+	- "Sync workflow has 6 steps" → architecture description, read the code
+	- "Use timeout 2400 for 327 traces" → ephemeral numbers, will change
+	- "Merge duplicates into comprehensive target" → generic advice, obvious
+	- "Runner times out at 900s" → bug report, will be fixed
+	- "Scorer returns 0.0" → bug report, one-time defect
+	- "Use client-side filtering for small datasets" → generic, any dev knows this
+	- "Use simple solutions by default" → generic truism
+	- "Run 10 hours of optimization" → directive/TODO, not a decision
+
+	KEEP examples:
+	- "Restrictive extraction rules always backfire" → non-obvious, quantified, changes approach
+	- "Replace app-level sandboxing with Docker kernel isolation" → architecture WHY not in code
+	- "LLMs over-constrain with restrictive rules — 5 experiments regressed" → friction, structural
+
+	Do NOT rewrite or modify candidates. Return accepted candidates exactly as
+	received. This is a filter, not a rewriter.
+	"""
+
+	candidates: list[MemoryCandidate] = dspy.InputField(
+		desc="Consolidated memory candidates to evaluate for quality",
+	)
+	accepted: list[MemoryCandidate] = dspy.OutputField(
+		desc="High-quality candidates that pass all criteria. Subset of input, unmodified.",
+	)
+
+
+class MemoryExtractionPipeline(dspy.Module):
+	"""Three-stage memory extraction: extract → consolidate → quality gate.
+
+	Stage 1 (extract): Run per transcript window, produces raw candidates.
+	Stage 2 (consolidate): Merge semantic duplicates across overlapping windows.
+	Stage 3 (quality_gate): Drop low-quality candidates using LLM judgment.
+
+	All three stages are optimizable by DSPy (MIPROv2, BootstrapFewShot, etc.).
+	"""
+
+	def __init__(self):
+		super().__init__()
+		self.extract = dspy.ChainOfThought(MemoryExtractSignature)
+		self.consolidate = dspy.ChainOfThought(ConsolidateCandidatesSignature)
+		self.quality_gate = dspy.ChainOfThought(QualityGateSignature)
+
+	def forward(self, windows: list[str], guidance: str = "") -> dspy.Prediction:
+		# Stage 1: Extract from each window
+		all_candidates: list[dict[str, Any]] = []
+		for window in windows:
+			result = self.extract(transcript=window, guidance=guidance)
+			primitives = result.primitives
+			if isinstance(primitives, list):
+				for item in primitives:
+					if isinstance(item, MemoryCandidate):
+						all_candidates.append(item.model_dump(mode="json", exclude_none=True))
+					elif isinstance(item, dict):
+						all_candidates.append(item)
+
+		# Deterministic pre-filter (cheap, catches obvious junk)
+		filtered = _filter_candidates(all_candidates)
+		if not filtered:
+			return dspy.Prediction(primitives=[])
+
+		# Stage 2: Consolidate cross-window duplicates
+		if len(filtered) > 1:
+			result = self.consolidate(candidates=filtered)
+			unique = result.unique_candidates
+			if isinstance(unique, list) and unique:
+				filtered = _to_dicts(unique)
+
+		# Stage 3: Quality gate
+		result = self.quality_gate(candidates=filtered)
+		accepted = result.accepted
+		if isinstance(accepted, list):
+			return dspy.Prediction(primitives=_to_dicts(accepted))
+
+		return dspy.Prediction(primitives=filtered)
+
+
+def _to_dicts(items: list) -> list[dict[str, Any]]:
+	"""Normalize MemoryCandidate or dict items to plain dicts."""
+	result: list[dict[str, Any]] = []
+	for item in items:
+		if isinstance(item, MemoryCandidate):
+			result.append(item.model_dump(mode="json", exclude_none=True))
+		elif isinstance(item, dict):
+			result.append(item)
+	return result
+
+
+def _consolidate_and_gate(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Run LLM consolidation and quality gate on extracted candidates.
+
+	Stage 2: Merge semantic duplicates across overlapping windows.
+	Stage 3: Drop low-quality candidates using LLM judgment.
+
+	Falls back gracefully — if either stage fails, the previous result is kept.
+	"""
+	if not candidates:
+		return []
+
+	lms = configure_dspy_lms("extract")
+	pipeline = MemoryExtractionPipeline()
+
+	# Stage 2: Consolidate cross-window duplicates
+	if len(candidates) > 1:
+		with logfire.span("consolidate_candidates", count=len(candidates)):
+			pre_count = len(candidates)
+			history_start = len(lms[0].history)
+			try:
+				_, result = call_with_fallback(
+					pipeline.consolidate, lms, candidates=candidates,
+				)
+				unique = result.unique_candidates
+				if isinstance(unique, list) and unique:
+					candidates = _to_dicts(unique)
+				logger.info("Consolidation: {} → {} candidates", pre_count, len(candidates))
+			except Exception:
+				logger.warning("Consolidation failed, keeping {} pre-filtered candidates", pre_count)
+			finally:
+				capture_dspy_cost(lms[0], history_start)
+
+	# Stage 3: Quality gate
+	with logfire.span("quality_gate", count=len(candidates)):
+		history_start = len(lms[0].history)
+		try:
+			_, result = call_with_fallback(
+				pipeline.quality_gate, lms, candidates=candidates,
+			)
+			accepted = result.accepted
+			if isinstance(accepted, list):
+				candidates = _to_dicts(accepted)
+			logger.info("Quality gate: {} accepted", len(candidates))
+		except Exception:
+			logger.warning("Quality gate failed, keeping {} consolidated candidates", len(candidates))
+		finally:
+			capture_dspy_cost(lms[0], history_start)
+
+	return candidates
 
 
 def _format_transcript_for_extraction(raw: str) -> str:
@@ -210,8 +481,8 @@ def _format_transcript_for_extraction(raw: str) -> str:
 def _detect_trace_format(lines: list[dict]) -> str:
 	"""Detect which agent produced this trace by inspecting line structure."""
 	for obj in lines[:5]:  # check first 5 lines
-		# Claude: has "type" in ("user","assistant") and "message" key
-		if obj.get("type") in ("user", "assistant") and "message" in obj:
+		# Claude: has "type" in ("user","assistant","human") and "message" key
+		if obj.get("type") in ("user", "assistant", "human") and "message" in obj:
 			return "claude"
 		# Codex: has "type" in ("event_msg","response_item","session_meta")
 		if obj.get("type") in ("event_msg", "response_item", "session_meta"):
@@ -238,11 +509,12 @@ def _format_claude_line(obj: dict) -> str | None:
 	role = msg.get("role", entry_type)
 	content = msg.get("content")
 
-	if role == "user":
+	if role in ("user", "human"):
 		text = _extract_content_text(content, skip_tool_results=True)
 		if text:
 			return f"[USER]\n{text}"
-	elif role == "assistant":
+	elif role in ("assistant", "ai"):
+		# "ai" is used by some LangChain-style traces
 		text = _extract_content_text(content, skip_tool_results=False)
 		if text:
 			return f"[ASSISTANT]\n{text}"
@@ -528,7 +800,7 @@ def _extract_candidates(
 
     When max_workers > 1 and multiple windows exist, processes windows in
     parallel via ThreadPoolExecutor. Otherwise falls back to sequential.
-    No merge or deduplication — maintain handles that downstream.
+    Applies deterministic filtering, LLM consolidation, and LLM quality gate.
     """
     if not transcript.strip():
         return []
@@ -568,13 +840,13 @@ def _extract_candidates(
                 }
                 for future in as_completed(futures):
                     all_candidates.extend(future.result())
-            return _filter_candidates(all_candidates)
+            return _consolidate_and_gate(_filter_candidates(all_candidates))
 
         # Sequential: single-thread path (max_workers=1 or single window)
         all_candidates = []
         for wi, window in enumerate(windows, 1):
             all_candidates.extend(_extract_one_window(wi, total, window, guid))
-        return _filter_candidates(all_candidates)
+        return _consolidate_and_gate(_filter_candidates(all_candidates))
 
 
 def extract_memories_from_session_file(
