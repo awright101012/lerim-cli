@@ -22,8 +22,6 @@ dependencies = [
     "logfire[dspy]==4.30.0",
     "litellm==1.81.13",
     "rich==14.3.3",
-    "fastembed>=0.8.0",
-    "sqlite-vec>=0.1.6",
 ]
 
 [project.urls]
@@ -53,7 +51,7 @@ docs = [
 ]
 
 [project.scripts]
-lerim = "lerim.app.cli:main"
+lerim = "lerim.server.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

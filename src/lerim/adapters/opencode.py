@@ -22,34 +22,30 @@ from typing import Any
 
 from lerim.adapters.base import SessionRecord, ViewerMessage, ViewerSession
 from lerim.adapters.common import (
+    compact_jsonl,
     in_window,
     load_jsonl_dict_lines,
     parse_timestamp,
+    readonly_connect,
+    write_session_cache,
 )
 
 
-def compact_trace(raw_text: str) -> str:
-    """Strip tool outputs from OpenCode session JSONL.
+def _clean_entry(obj: dict[str, Any]) -> dict[str, Any]:
+    """Apply OpenCode-specific cleaning to a single JSONL entry.
 
     Clears: tool_output field on tool messages (replaced with size descriptor).
     Preserves: tool_name and tool_input for context.
-    First line (session metadata) is passed through unchanged.
     """
-    kept: list[str] = []
-    for line in raw_text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            obj = json.loads(stripped)
-        except json.JSONDecodeError:
-            kept.append(line)
-            continue
-        if obj.get("role") == "tool" and "tool_output" in obj:
-            output = obj["tool_output"]
-            obj["tool_output"] = f"[cleared: {len(str(output))} chars]"
-        kept.append(json.dumps(obj, ensure_ascii=False))
-    return "\n".join(kept) + "\n"
+    if obj.get("role") == "tool" and "tool_output" in obj:
+        output = obj["tool_output"]
+        obj["tool_output"] = f"[cleared: {len(str(output))} chars]"
+    return obj
+
+
+def compact_trace(raw_text: str) -> str:
+    """Strip tool outputs from OpenCode session JSONL."""
+    return compact_jsonl(raw_text, _clean_entry)
 
 
 def default_path() -> Path | None:
@@ -89,10 +85,9 @@ def validate_connection(path: Path) -> dict[str, Any]:
     if not db_path:
         return {"ok": False, "error": f"No opencode.db found under {path}"}
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA query_only=ON")
+        conn = readonly_connect(db_path)
         tables = {
-            r[0]
+            r["name"]
             for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
@@ -120,8 +115,7 @@ def count_sessions(path: Path) -> int:
     if not db_path:
         return 0
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA query_only=ON")
+        conn = readonly_connect(db_path)
         n = conn.execute("SELECT COUNT(*) FROM session").fetchone()[0]
         conn.close()
         return n
@@ -146,8 +140,7 @@ def find_session_path(session_id: str, traces_dir: Path | None = None) -> Path |
     if not db_path:
         return None
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA query_only=ON")
+        conn = readonly_connect(db_path)
         row = conn.execute(
             "SELECT id FROM session WHERE id = ? LIMIT 1", (session_id,)
         ).fetchone()
@@ -160,8 +153,7 @@ def find_session_path(session_id: str, traces_dir: Path | None = None) -> Path |
 def _read_session_db(db_path: Path, session_id: str) -> ViewerSession | None:
     """Read one OpenCode session directly from the SQLite database."""
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA query_only=ON")
+        conn = readonly_connect(db_path)
 
         sess_row = conn.execute(
             "SELECT directory, version, title FROM session WHERE id = ?",
@@ -170,7 +162,9 @@ def _read_session_db(db_path: Path, session_id: str) -> ViewerSession | None:
         if not sess_row:
             conn.close()
             return None
-        cwd, version, title = sess_row
+        cwd = sess_row["directory"]
+        version = sess_row["version"]
+        title = sess_row["title"]
 
         msg_rows = conn.execute(
             "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created",
@@ -181,8 +175,9 @@ def _read_session_db(db_path: Path, session_id: str) -> ViewerSession | None:
         total_output = 0
         messages: list[ViewerMessage] = []
 
-        for msg_id, msg_raw in msg_rows:
-            msg = _json_col(msg_raw)
+        for msg_row in msg_rows:
+            msg_id = msg_row["id"]
+            msg = _json_col(msg_row["data"])
             role = str(msg.get("role") or "assistant")
             time_info = msg.get("time") or {}
             timestamp = parse_timestamp(time_info.get("created"))
@@ -201,8 +196,8 @@ def _read_session_db(db_path: Path, session_id: str) -> ViewerSession | None:
             ).fetchall()
 
             text_parts: list[str] = []
-            for (part_raw,) in part_rows:
-                part = _json_col(part_raw)
+            for part_row in part_rows:
+                part = _json_col(part_row["data"])
                 ptype = part.get("type")
                 if ptype == "text":
                     text = part.get("text")
@@ -293,7 +288,6 @@ def _read_session_jsonl(path: Path, session_id: str | None) -> ViewerSession | N
 
 def _export_session_jsonl(session: ViewerSession, out_dir: Path) -> Path:
     """Export a ViewerSession to a compacted JSONL cache file, return the file path."""
-    jsonl_path = out_dir / f"{session.session_id}.jsonl"
     lines: list[str] = []
     # First line: session metadata
     lines.append(
@@ -305,7 +299,7 @@ def _export_session_jsonl(session: ViewerSession, out_dir: Path) -> Path:
                 "total_output_tokens": session.total_output_tokens,
                 "meta": session.meta,
             },
-            ensure_ascii=True,
+            ensure_ascii=False,
         )
     )
     # Remaining lines: one per message
@@ -323,10 +317,8 @@ def _export_session_jsonl(session: ViewerSession, out_dir: Path) -> Path:
             row["tool_input"] = msg.tool_input
         if msg.tool_output is not None:
             row["tool_output"] = msg.tool_output
-        lines.append(json.dumps(row, ensure_ascii=True))
-    compacted = compact_trace("\n".join(lines) + "\n")
-    jsonl_path.write_text(compacted, encoding="utf-8")
-    return jsonl_path
+        lines.append(json.dumps(row, ensure_ascii=False))
+    return write_session_cache(out_dir, session.session_id, lines, compact_trace)
 
 
 def read_session(
@@ -366,12 +358,10 @@ def iter_sessions(
         return []
 
     out_dir = cache_dir or _default_cache_dir()
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     records: list[SessionRecord] = []
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA query_only=ON")
+        conn = readonly_connect(db_path)
         rows = conn.execute(
             """SELECT id, directory, title, time_created FROM session \
 ORDER BY time_created"""
@@ -380,7 +370,10 @@ ORDER BY time_created"""
     except sqlite3.Error:
         return []
 
-    for sess_id, directory, title, time_created in rows:
+    for row in rows:
+        sess_id = row["id"]
+        directory = row["directory"]
+        time_created = row["time_created"]
         start_dt = parse_timestamp(time_created)
         if not in_window(start_dt, start, end):
             continue

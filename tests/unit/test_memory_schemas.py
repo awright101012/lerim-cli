@@ -5,154 +5,110 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from lerim.memory.schemas import MemoryCandidate
+from lerim.agents.schemas import MemoryCandidate
 
 
-def test_memory_candidate_valid_decision():
-    """Valid decision candidate passes validation."""
+# --- Valid types ---
+
+
+@pytest.mark.parametrize("mem_type", ["user", "feedback", "project", "reference"])
+def test_memory_candidate_valid_types(mem_type: str):
+    """All four valid types are accepted."""
     c = MemoryCandidate(
-        primitive="decision",
-        title="Use JWT for auth",
-        body="We chose JWT with HS256.",
-        confidence=0.9,
-        tags=["auth"],
+        type=mem_type,
+        name=f"Name for {mem_type}",
+        description=f"Description for {mem_type}",
+        body=f"Body content for {mem_type}",
     )
-    assert c.primitive == "decision"
-    assert c.title == "Use JWT for auth"
+    assert c.type == mem_type
+    assert c.name == f"Name for {mem_type}"
+    assert c.description == f"Description for {mem_type}"
+    assert c.body == f"Body content for {mem_type}"
 
 
-def test_memory_candidate_valid_learning():
-    """Valid learning candidate with kind passes validation."""
-    c = MemoryCandidate(
-        primitive="learning",
-        kind="pitfall",
-        title="Queue must be atomic",
-        body="Always use atomic claims.",
-        confidence=0.8,
-        tags=["queue"],
-    )
-    assert c.kind == "pitfall"
-
-
-def test_memory_candidate_invalid_primitive():
-    """primitive='summary' -> ValidationError."""
-    with pytest.raises(ValidationError):
-        MemoryCandidate(
-            primitive="summary",
-            title="Bad type",
-            body="Should fail",
-        )
-
-
-def test_memory_candidate_coerces_pitfall_primitive_to_learning_kind():
-    """LLMs sometimes set primitive to a learning subtype; normalize to learning + kind."""
-    c = MemoryCandidate.model_validate(
-        {
-            "primitive": "pitfall",
-            "title": "Avoid concurrent Metal",
-            "body": "vllm-mlx crashes when two requests hit Metal at once; serialize calls.",
-        }
-    )
-    assert c.primitive == "learning"
-    assert c.kind == "pitfall"
+# --- Invalid type ---
 
 
 @pytest.mark.parametrize(
-    "subtype",
-    ["insight", "procedure", "friction", "preference"],
+    "bad_type",
+    ["decision", "learning", "summary", "pitfall", "insight", "procedure", "bogus"],
 )
-def test_memory_candidate_coerces_all_learning_subtypes_used_as_primitive(subtype: str):
-    """Each VALID_KINDS value misplaced in primitive maps to learning + that kind."""
-    c = MemoryCandidate.model_validate(
-        {
-            "primitive": subtype,
-            "title": "x" * 12,
-            "body": "y" * 60,
-        }
-    )
-    assert c.primitive == "learning"
-    assert c.kind == subtype
-
-
-def test_memory_candidate_coerce_preserves_explicit_kind():
-    """When kind is already set, only fix primitive."""
-    c = MemoryCandidate.model_validate(
-        {
-            "primitive": "pitfall",
-            "kind": "insight",
-            "title": "x" * 12,
-            "body": "y" * 60,
-        }
-    )
-    assert c.primitive == "learning"
-    assert c.kind == "insight"
-
-
-def test_memory_candidate_confidence_bounds():
-    """confidence outside [0,1] -> ValidationError."""
+def test_memory_candidate_invalid_type(bad_type: str):
+    """Old primitive values and arbitrary strings are rejected."""
     with pytest.raises(ValidationError):
         MemoryCandidate(
-            primitive="decision",
-            title="Test",
-            body="Test",
-            confidence=1.5,
-        )
-    with pytest.raises(ValidationError):
-        MemoryCandidate(
-            primitive="decision",
-            title="Test",
-            body="Test",
-            confidence=-0.1,
+            type=bad_type,
+            name="Bad",
+            description="Should fail",
+            body="Body",
         )
 
 
-def test_memory_candidate_empty_title():
-    """Empty title -> still passes (Pydantic allows empty str by default)."""
-    # MemoryCandidate uses plain str, so empty is technically valid
-    c = MemoryCandidate(primitive="decision", title="", body="content")
-    assert c.title == ""
+# --- Required fields ---
 
 
-def test_memory_candidate_tags_are_list():
-    """Tags field must be list of strings."""
-    c = MemoryCandidate(
-        primitive="decision",
-        title="Test",
-        body="Body",
-        tags=["a", "b", "c"],
-    )
-    assert isinstance(c.tags, list)
-    assert all(isinstance(t, str) for t in c.tags)
+def test_memory_candidate_missing_name():
+    """Missing name -> ValidationError."""
+    with pytest.raises(ValidationError):
+        MemoryCandidate(type="user", description="desc", body="body")
+
+
+def test_memory_candidate_missing_description():
+    """Missing description -> ValidationError."""
+    with pytest.raises(ValidationError):
+        MemoryCandidate(type="user", name="name", body="body")
+
+
+def test_memory_candidate_missing_body():
+    """Missing body -> ValidationError."""
+    with pytest.raises(ValidationError):
+        MemoryCandidate(type="user", name="name", description="desc")
+
+
+def test_memory_candidate_missing_type():
+    """Missing type -> ValidationError."""
+    with pytest.raises(ValidationError):
+        MemoryCandidate(name="name", description="desc", body="body")
+
+
+# --- Schema stability ---
+
+
+def test_memory_candidate_fields_exactly_four():
+    """MemoryCandidate has exactly 4 fields: type, name, description, body."""
+    assert set(MemoryCandidate.model_fields.keys()) == {
+        "type",
+        "name",
+        "description",
+        "body",
+    }
 
 
 def test_memory_candidate_json_schema():
-    """model_json_schema() produces valid JSON Schema dict."""
+    """model_json_schema() produces valid JSON Schema dict with expected properties."""
     schema = MemoryCandidate.model_json_schema()
     assert isinstance(schema, dict)
-    assert "title" in schema
     assert "properties" in schema
-    assert "primitive" in schema["properties"]
-    assert "body" in schema["properties"]
+    assert set(schema["properties"].keys()) == {"type", "name", "description", "body"}
 
 
-def test_memory_candidate_outcome_field():
-	"""MemoryCandidate should support the outcome field."""
-	c = MemoryCandidate(
-		primitive="learning",
-		kind="insight",
-		title="Test",
-		body="Test content",
-		confidence=0.8,
-		outcome="worked",
-	)
-	assert c.outcome == "worked"
+def test_memory_candidate_model_validate():
+    """model_validate from dict works correctly."""
+    c = MemoryCandidate.model_validate(
+        {
+            "type": "feedback",
+            "name": "Never truncate logs",
+            "description": "Always show full content in UI and logs.",
+            "body": "Detailed explanation of the feedback preference.",
+        }
+    )
+    assert c.type == "feedback"
+    assert c.name == "Never truncate logs"
 
 
-def test_memory_candidate_outcome_default_none():
-	"""MemoryCandidate outcome should default to None."""
-	c = MemoryCandidate(
-		primitive="decision",
-		title="Test",
-		body="Test content",
-	)
-	assert c.outcome is None
+def test_memory_candidate_empty_strings_accepted():
+    """Empty strings for name/description/body are accepted by Pydantic (plain str)."""
+    c = MemoryCandidate(type="user", name="", description="", body="")
+    assert c.name == ""
+    assert c.description == ""
+    assert c.body == ""

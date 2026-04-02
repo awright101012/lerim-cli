@@ -6,70 +6,66 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import json
-
 from lerim.adapters.base import SessionRecord, ViewerMessage, ViewerSession
 from lerim.adapters.common import (
+    compact_jsonl,
     count_non_empty_files,
     in_window,
     load_jsonl_dict_lines,
     parse_timestamp,
+    write_session_cache,
 )
 
 
-def compact_trace(raw_text: str) -> str:
-    """Remove non-conversational noise and strip tool outputs from Claude trace JSONL.
+_DROP_TYPES = {"progress", "file-history-snapshot", "queue-operation", "pr-link"}
+_KEEP_FIELDS = {"type", "message", "timestamp"}
+
+
+def _clean_entry(obj: dict[str, Any]) -> dict[str, Any] | None:
+    """Apply Claude-specific cleaning to a single JSONL entry.
 
     Drops: progress, file-history-snapshot, queue-operation, pr-link lines.
     Strips: metadata fields not needed for extraction (parentUuid, toolUseResult, etc.).
     Clears: all tool_result content (replaced with size descriptor).
     Clears: thinking block content (replaced with size descriptor).
     """
-    drop_types = {"progress", "file-history-snapshot", "queue-operation", "pr-link"}
-    keep_fields = {"type", "message", "timestamp"}
-    kept: list[str] = []
-    for line in raw_text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            obj = json.loads(stripped)
-        except json.JSONDecodeError:
-            kept.append(line)
-            continue
-        if obj.get("type") in drop_types:
-            continue
-        # Strip to only conversation-relevant fields
-        obj = {k: v for k, v in obj.items() if k in keep_fields}
-        # Strip metadata from inner message — keep only role and content
-        msg = obj.get("message")
-        if isinstance(msg, dict):
-            obj["message"] = {k: v for k, v in msg.items() if k in {"role", "content"}}
-            msg = obj["message"]
-        # Clear tool_result content and thinking blocks
-        if isinstance(msg, dict):
-            content = msg.get("content")
-            if isinstance(content, list):
-                for block in content:
-                    if not isinstance(block, dict):
-                        continue
-                    if block.get("type") == "tool_result":
-                        inner = block.get("content", "")
-                        if isinstance(inner, str):
-                            block["content"] = f"[cleared: {len(inner)} chars]"
-                        elif isinstance(inner, list):
-                            total = sum(
-                                len(s.get("text", ""))
-                                for s in inner
-                                if isinstance(s, dict)
-                            )
-                            block["content"] = f"[cleared: {total} chars]"
-                    elif block.get("type") == "thinking":
-                        text = block.get("thinking", "")
-                        block["thinking"] = f"[thinking cleared: {len(text)} chars]"
-                        block.pop("signature", None)
-        kept.append(json.dumps(obj, ensure_ascii=False))
-    return "\n".join(kept) + "\n"
+    if obj.get("type") in _DROP_TYPES:
+        return None
+    # Strip to only conversation-relevant fields
+    obj = {k: v for k, v in obj.items() if k in _KEEP_FIELDS}
+    # Strip metadata from inner message -- keep only role and content
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        obj["message"] = {k: v for k, v in msg.items() if k in {"role", "content"}}
+        msg = obj["message"]
+    # Clear tool_result content and thinking blocks
+    if isinstance(msg, dict):
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_result":
+                    inner = block.get("content", "")
+                    if isinstance(inner, str):
+                        block["content"] = f"[cleared: {len(inner)} chars]"
+                    elif isinstance(inner, list):
+                        total = sum(
+                            len(s.get("text", ""))
+                            for s in inner
+                            if isinstance(s, dict)
+                        )
+                        block["content"] = f"[cleared: {total} chars]"
+                elif block.get("type") == "thinking":
+                    text = block.get("thinking", "")
+                    block["thinking"] = f"[thinking cleared: {len(text)} chars]"
+                    block.pop("signature", None)
+    return obj
+
+
+def compact_trace(raw_text: str) -> str:
+    """Strip tool outputs and noise from Claude session JSONL."""
+    return compact_jsonl(raw_text, _clean_entry)
 
 
 def _default_cache_dir() -> Path:
@@ -223,7 +219,6 @@ def iter_sessions(
         return []
 
     cache_dir = _default_cache_dir()
-    cache_dir.mkdir(parents=True, exist_ok=True)
 
     records: list[SessionRecord] = []
     for path in base.rglob("*.jsonl"):
@@ -300,9 +295,8 @@ def iter_sessions(
             continue
 
         # Compact and export to cache
-        compacted = compact_trace(path.read_text(encoding="utf-8"))
-        cache_path = cache_dir / f"{run_id}.jsonl"
-        cache_path.write_text(compacted, encoding="utf-8")
+        raw_lines = path.read_text(encoding="utf-8").rstrip("\n").split("\n")
+        cache_path = write_session_cache(cache_dir, run_id, raw_lines, compact_trace)
 
         records.append(
             SessionRecord(

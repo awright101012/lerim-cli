@@ -1,10 +1,10 @@
 """Memory package exports for records, paths, and layout helpers."""
 
-from lerim.memory.memory_record import (
+from lerim.agents.schemas import (
     MemoryRecord,
     MemoryType,
 )
-from lerim.memory.memory_repo import (
+from lerim.memory.repo import (
     MemoryPaths,
     build_memory_paths,
     ensure_memory_paths,

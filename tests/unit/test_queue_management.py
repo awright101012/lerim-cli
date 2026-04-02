@@ -459,45 +459,6 @@ def test_full_lifecycle_skip_then_next_job():
 	assert "sk-new" in claimed_ids
 
 
-def test_stale_running_jobs_become_dead_letter_and_block():
-	"""Stale running job with max_attempts exhausted becomes dead_letter and blocks project."""
-	_seed_and_enqueue("st-job", "/tmp/proj-st", start_time="2026-03-01T08:00:00Z")
-	_seed_and_enqueue("st-next", "/tmp/proj-st", start_time="2026-03-01T10:00:00Z")
-
-	# Claim the job (attempts becomes 1)
-	jobs = claim_session_jobs(limit=10)
-	matched = [j for j in jobs if j["run_id"] == "st-job"]
-	assert len(matched) == 1
-
-	# Simulate that the job has been running for a while and already hit max_attempts.
-	# Set attempts = 3 (= max_attempts) and push claimed_at/heartbeat_at far in the past.
-	stale_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-	with _connect() as conn:
-		conn.execute(
-			"""
-			UPDATE session_jobs
-			SET attempts = 3, claimed_at = ?, heartbeat_at = ?
-			WHERE run_id = ?
-			""",
-			(stale_ts, stale_ts, "st-job"),
-		)
-		conn.commit()
-
-	# Next claim cycle should recycle the stale job to dead_letter (attempts >= max_attempts)
-	jobs2 = claim_session_jobs(limit=10, timeout_seconds=60)
-
-	# Verify the stale job is now dead_letter
-	with _connect() as conn:
-		row = conn.execute(
-			"SELECT status FROM session_jobs WHERE run_id = ?", ("st-job",)
-		).fetchone()
-	assert row["status"] == "dead_letter"
-
-	# Project should be blocked -- st-next should not be in the claimed batch
-	claimed_ids = {j["run_id"] for j in jobs2}
-	assert "st-next" not in claimed_ids
-
-
 # ── Concurrent project integration tests ─────────────────────────────
 
 

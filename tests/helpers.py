@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
-from lerim.config.settings import AgentRoleConfig, CodexRoleConfig, Config, DSPyRoleConfig
+from lerim.config.settings import Config, RoleConfig
 
 
 def make_config(base: Path) -> Config:
@@ -18,48 +18,32 @@ def make_config(base: Path) -> Config:
         global_data_dir=base,
         memory_dir=base / "memory",
         index_dir=base / "index",
-        memories_db_path=base / "index" / "memories.sqlite3",
-        graph_db_path=base / "index" / "graph.sqlite3",
         sessions_db_path=base / "index" / "sessions.sqlite3",
         platforms_path=base / "platforms.json",
         memory_scope="global_only",
         memory_project_dir_name=".lerim",
-        decay_enabled=True,
-        decay_days=180,
-        decay_min_confidence_floor=0.1,
-        decay_archive_threshold=0.2,
-        decay_recent_access_grace_days=30,
         server_host="127.0.0.1",
         server_port=8765,
         sync_interval_minutes=5,
         maintain_interval_minutes=5,
-        lead_role=AgentRoleConfig(
+        lead_role=RoleConfig(
             provider="openrouter",
             model="x-ai/grok-4.1-fast",
-            api_base="",
-            fallback_models=(),
             timeout_seconds=300,
-            max_iterations=10,
-            openrouter_provider_order=(),
         ),
-        codex_role=CodexRoleConfig(),
-        extract_role=DSPyRoleConfig(
+        extract_role=RoleConfig(
             provider="openrouter",
             model="openai/gpt-5-nano",
-            api_base="",
             timeout_seconds=180,
             max_window_tokens=300000,
             window_overlap_tokens=5000,
-            openrouter_provider_order=(),
         ),
-        summarize_role=DSPyRoleConfig(
+        summarize_role=RoleConfig(
             provider="openrouter",
             model="openai/gpt-5-nano",
-            api_base="",
             timeout_seconds=180,
             max_window_tokens=300000,
             window_overlap_tokens=5000,
-            openrouter_provider_order=(),
         ),
         sync_window_days=7,
         sync_max_sessions=50,
@@ -150,7 +134,7 @@ def write_test_config(tmp_path: Path, **sections: dict[str, Any]) -> Path:
 
 def run_cli(args: list[str]) -> tuple[int, str]:
     """Run CLI command and return ``(exit_code, stdout_text)``."""
-    from lerim.app import cli
+    from lerim.server import cli
 
     out = io.StringIO()
     with redirect_stdout(out):

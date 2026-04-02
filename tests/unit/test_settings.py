@@ -17,8 +17,7 @@ from lerim.config.settings import (
     _parse_string_table,
     _toml_value,
     _toml_write_dict,
-    _build_agent_role,
-    _build_dspy_role,
+    _build_role,
     load_toml_file,
     save_config_patch,
     reload_config,
@@ -304,8 +303,8 @@ def test_port_over_65535_resets(tmp_path, monkeypatch):
 
 
 def test_agent_role_explicit_overrides():
-    """_build_agent_role uses explicit values over defaults."""
-    role = _build_agent_role(
+    """_build_role uses explicit values over defaults."""
+    role = _build_role(
         {
             "provider": "anthropic",
             "model": "claude-3",
@@ -321,8 +320,8 @@ def test_agent_role_explicit_overrides():
 
 
 def test_agent_role_timeout_minimum():
-    """_build_agent_role enforces minimum timeout of 10s."""
-    role = _build_agent_role(
+    """_build_role enforces minimum timeout of 10s."""
+    role = _build_role(
         {"timeout_seconds": 5, "max_iterations": 10},
         default_provider="openrouter",
         default_model="m",
@@ -330,23 +329,9 @@ def test_agent_role_timeout_minimum():
     assert role.timeout_seconds == 10
 
 
-def test_dspy_role_windowing_required():
-    """_build_dspy_role raises when windowing config keys are missing."""
-    import pytest
-
-    with pytest.raises(
-        ValueError, match="missing required config key: max_window_tokens"
-    ):
-        _build_dspy_role(
-            {"provider": "ollama", "model": "qwen3:8b", "timeout_seconds": 180},
-            default_provider="openrouter",
-            default_model="default",
-        )
-
-
 def test_dspy_role_explicit_windowing():
-    """_build_dspy_role uses explicit windowing values when set."""
-    role = _build_dspy_role(
+    """_build_role uses explicit windowing values when set."""
+    role = _build_role(
         {
             "provider": "ollama",
             "model": "qwen3:8b",
@@ -359,17 +344,3 @@ def test_dspy_role_explicit_windowing():
     )
     assert role.max_window_tokens == 50000
     assert role.window_overlap_tokens == 2000
-
-
-def test_dspy_role_max_window_tokens_minimum():
-    """_build_dspy_role enforces minimum max_window_tokens of 1000."""
-    role = _build_dspy_role(
-        {
-            "timeout_seconds": 180,
-            "max_window_tokens": -5,
-            "window_overlap_tokens": 5000,
-        },
-        default_provider="ollama",
-        default_model="m",
-    )
-    assert role.max_window_tokens == 1000

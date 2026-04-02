@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from lerim.app import daemon
-from lerim.app.activity_log import log_activity
+from lerim.server import daemon
+from lerim.server.daemon import log_activity
 from lerim.config.settings import reload_config
 from lerim.sessions import catalog
 from tests.helpers import make_config, write_test_config
@@ -32,7 +32,7 @@ def test_sync_does_not_run_vector_rebuild(monkeypatch, tmp_path) -> None:
     )
 
     monkeypatch.setattr(
-        "lerim.runtime.runtime.LerimRuntime.sync",
+        "lerim.server.runtime.LerimRuntime.sync",
         lambda *_args, **_kwargs: {
             "counts": {"add": 1, "update": 0, "no_op": 0},
         },
@@ -84,7 +84,7 @@ def test_sync_force_enqueues_changed_sessions(monkeypatch, tmp_path) -> None:
     from lerim.sessions.catalog import IndexedSession
 
     monkeypatch.setattr(
-        "lerim.app.daemon.index_new_sessions",
+        "lerim.server.daemon.index_new_sessions",
         lambda **kw: [
             IndexedSession(
                 run_id="run-changed-1",
@@ -97,7 +97,7 @@ def test_sync_force_enqueues_changed_sessions(monkeypatch, tmp_path) -> None:
         ],
     )
     monkeypatch.setattr(
-        "lerim.runtime.runtime.LerimRuntime.sync",
+        "lerim.server.runtime.LerimRuntime.sync",
         lambda *_a, **_kw: {"counts": {"add": 0, "update": 1, "no_op": 0}},
     )
 
@@ -123,7 +123,7 @@ def test_maintain_calls_agent(monkeypatch, tmp_path) -> None:
     _setup(tmp_path, monkeypatch)
     called: list[str] = []
     monkeypatch.setattr(
-        "lerim.runtime.runtime.LerimRuntime.maintain",
+        "lerim.server.runtime.LerimRuntime.maintain",
         lambda self, **kw: (
             called.append(kw.get("memory_root", "")),
             {
@@ -202,7 +202,7 @@ def test_daemon_sync_runs_more_often_than_maintain(tmp_path) -> None:
 def test_log_activity_appends_line(tmp_path, monkeypatch) -> None:
     """log_activity writes one formatted line per call."""
     log_file = tmp_path / "activity.log"
-    monkeypatch.setattr("lerim.app.activity_log.ACTIVITY_LOG_PATH", log_file)
+    monkeypatch.setattr("lerim.server.daemon.ACTIVITY_LOG_PATH", log_file)
 
     log_activity("sync", "myproject", "3 new, 1 updated, 2 sessions", 4.2)
     log_activity("maintain", "myproject", "2 archived, 1 merged", 6.15)

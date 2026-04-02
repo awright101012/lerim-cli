@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lerim.config.settings import AgentRoleConfig, CodexRoleConfig, Config, DSPyRoleConfig
-from lerim.runtime.ollama_lifecycle import (
+from lerim.config.settings import Config, RoleConfig
+from lerim.server.api import (
     _ollama_models,
     ollama_lifecycle,
 )
@@ -36,48 +36,32 @@ def _make_ollama_config(
         global_data_dir=base.global_data_dir,
         memory_dir=base.memory_dir,
         index_dir=base.index_dir,
-        memories_db_path=base.memories_db_path,
-        graph_db_path=base.graph_db_path,
         sessions_db_path=base.sessions_db_path,
         platforms_path=base.platforms_path,
         memory_scope=base.memory_scope,
         memory_project_dir_name=base.memory_project_dir_name,
-        decay_enabled=base.decay_enabled,
-        decay_days=base.decay_days,
-        decay_min_confidence_floor=base.decay_min_confidence_floor,
-        decay_archive_threshold=base.decay_archive_threshold,
-        decay_recent_access_grace_days=base.decay_recent_access_grace_days,
         server_host=base.server_host,
         server_port=base.server_port,
         sync_interval_minutes=base.sync_interval_minutes,
         maintain_interval_minutes=base.maintain_interval_minutes,
-        lead_role=AgentRoleConfig(
+        lead_role=RoleConfig(
             provider=lead_provider,
             model=lead_model,
-            api_base="",
-            fallback_models=(),
             timeout_seconds=300,
-            max_iterations=10,
-            openrouter_provider_order=(),
         ),
-        codex_role=CodexRoleConfig(),
-        extract_role=DSPyRoleConfig(
+        extract_role=RoleConfig(
             provider=extract_provider,
             model=extract_model,
-            api_base="",
             timeout_seconds=180,
             max_window_tokens=300000,
             window_overlap_tokens=5000,
-            openrouter_provider_order=(),
         ),
-        summarize_role=DSPyRoleConfig(
+        summarize_role=RoleConfig(
             provider=extract_provider,
             model=extract_model,
-            api_base="",
             timeout_seconds=180,
             max_window_tokens=300000,
             window_overlap_tokens=5000,
-            openrouter_provider_order=(),
         ),
         sync_window_days=7,
         sync_max_sessions=50,
@@ -150,9 +134,9 @@ class TestOllamaLifecycle:
         with ollama_lifecycle(config):
             pass  # Should not make any HTTP calls
 
-    @patch("lerim.runtime.ollama_lifecycle._unload_model")
-    @patch("lerim.runtime.ollama_lifecycle._load_model")
-    @patch("lerim.runtime.ollama_lifecycle._is_ollama_reachable", return_value=True)
+    @patch("lerim.server.api._unload_model")
+    @patch("lerim.server.api._load_model")
+    @patch("lerim.server.api._is_ollama_reachable", return_value=True)
     def test_load_and_unload(
         self,
         mock_reachable: MagicMock,
@@ -169,9 +153,9 @@ class TestOllamaLifecycle:
             mock_unload.assert_not_called()
         mock_unload.assert_called_once_with("http://127.0.0.1:11434", "qwen3.5:4b-q8_0")
 
-    @patch("lerim.runtime.ollama_lifecycle._unload_model")
-    @patch("lerim.runtime.ollama_lifecycle._load_model")
-    @patch("lerim.runtime.ollama_lifecycle._is_ollama_reachable", return_value=True)
+    @patch("lerim.server.api._unload_model")
+    @patch("lerim.server.api._load_model")
+    @patch("lerim.server.api._is_ollama_reachable", return_value=True)
     def test_auto_unload_false_skips_unload(
         self,
         mock_reachable: MagicMock,
@@ -186,9 +170,9 @@ class TestOllamaLifecycle:
         mock_load.assert_called_once()
         mock_unload.assert_not_called()
 
-    @patch("lerim.runtime.ollama_lifecycle._unload_model")
-    @patch("lerim.runtime.ollama_lifecycle._load_model")
-    @patch("lerim.runtime.ollama_lifecycle._is_ollama_reachable", return_value=False)
+    @patch("lerim.server.api._unload_model")
+    @patch("lerim.server.api._load_model")
+    @patch("lerim.server.api._is_ollama_reachable", return_value=False)
     def test_unreachable_skips_gracefully(
         self,
         mock_reachable: MagicMock,
@@ -203,9 +187,9 @@ class TestOllamaLifecycle:
         mock_load.assert_not_called()
         mock_unload.assert_not_called()
 
-    @patch("lerim.runtime.ollama_lifecycle._unload_model")
-    @patch("lerim.runtime.ollama_lifecycle._load_model")
-    @patch("lerim.runtime.ollama_lifecycle._is_ollama_reachable", return_value=True)
+    @patch("lerim.server.api._unload_model")
+    @patch("lerim.server.api._load_model")
+    @patch("lerim.server.api._is_ollama_reachable", return_value=True)
     def test_unload_on_exception(
         self,
         mock_reachable: MagicMock,
@@ -220,9 +204,9 @@ class TestOllamaLifecycle:
                 raise ValueError("test error")
         mock_unload.assert_called_once()
 
-    @patch("lerim.runtime.ollama_lifecycle._unload_model")
-    @patch("lerim.runtime.ollama_lifecycle._load_model")
-    @patch("lerim.runtime.ollama_lifecycle._is_ollama_reachable", return_value=True)
+    @patch("lerim.server.api._unload_model")
+    @patch("lerim.server.api._load_model")
+    @patch("lerim.server.api._is_ollama_reachable", return_value=True)
     def test_multiple_models(
         self,
         mock_reachable: MagicMock,

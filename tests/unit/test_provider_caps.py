@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from lerim.runtime.provider_caps import (
+from lerim.config.providers import (
 	PROVIDER_CAPABILITIES,
-	get_missing_api_key_message,
 	normalize_model_name,
 	validate_provider_for_role,
 )
@@ -32,26 +31,6 @@ class TestValidateProviderForRole:
 		"""Provider that exists but doesn't support the role should list its supported roles."""
 		with pytest.raises(RuntimeError, match="does not support role 'summarize'"):
 			validate_provider_for_role("mlx", "summarize")
-
-
-class TestGetMissingApiKeyMessage:
-	"""Tests for get_missing_api_key_message."""
-
-	def test_returns_message_when_key_not_set(self, monkeypatch):
-		"""Should return an error string when the required env var is missing."""
-		monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
-		msg = get_missing_api_key_message("minimax")
-		assert msg is not None
-		assert "MINIMAX_API_KEY" in msg
-
-	def test_returns_none_when_key_is_set(self, monkeypatch):
-		"""Should return None when the required env var is present."""
-		monkeypatch.setenv("MINIMAX_API_KEY", "test-key-value")
-		assert get_missing_api_key_message("minimax") is None
-
-	def test_returns_none_for_provider_without_key(self):
-		"""Providers like ollama have api_key_env=None -- should return None."""
-		assert get_missing_api_key_message("ollama") is None
 
 
 class TestNormalizeModelName:

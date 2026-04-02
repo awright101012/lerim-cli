@@ -1,6 +1,6 @@
 """Unit tests for DSPy ReAct tools (write_memory, write_report, read_file, list_files,
-archive_memory, edit_memory, write_hot_memory, memory_search, batch_dedup_candidates,
-bind_sync_tools, bind_maintain_tools, bind_ask_tools)."""
+archive_memory, edit_memory, scan_memory_manifest, update_memory_index,
+bind_extract_tools, bind_maintain_tools, bind_ask_tools)."""
 
 from __future__ import annotations
 
@@ -10,18 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from lerim.runtime.context import RuntimeContext, build_context
-from lerim.runtime.tools import (
+from lerim.agents.context import RuntimeContext, build_context
+from lerim.agents.tools import (
 	archive_memory,
-	batch_dedup_candidates,
 	bind_ask_tools,
 	bind_maintain_tools,
-	bind_sync_tools,
+	bind_extract_tools,
 	edit_memory,
 	list_files,
-	memory_search,
 	read_file,
-	write_hot_memory,
+	scan_memory_manifest,
+	update_memory_index,
 	write_memory,
 	write_report,
 )
@@ -32,9 +31,6 @@ def _make_ctx(tmp_path: Path, **overrides) -> RuntimeContext:
 	"""Build a RuntimeContext for testing."""
 	mem_root = tmp_path / "memories"
 	mem_root.mkdir(exist_ok=True)
-	(mem_root / "decisions").mkdir(exist_ok=True)
-	(mem_root / "learnings").mkdir(exist_ok=True)
-	(mem_root / "summaries").mkdir(exist_ok=True)
 	run_folder = tmp_path / "runs" / "test-run"
 	run_folder.mkdir(parents=True, exist_ok=True)
 
@@ -56,95 +52,110 @@ def _make_ctx(tmp_path: Path, **overrides) -> RuntimeContext:
 # ---------------------------------------------------------------------------
 
 
-def test_write_memory_valid_decision(tmp_path):
-	"""Valid decision memory should write a file and return JSON with file_path."""
+def test_write_memory_valid_project(tmp_path):
+	"""Valid project memory should write a file and return JSON with file_path."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="decision",
-		title="Use PostgreSQL",
-		body="All persistence should use PostgreSQL.",
-		confidence=0.9,
-		tags="database,infrastructure",
+		type="project",
+		name="Use PostgreSQL",
+		description="All persistence should use PostgreSQL for reliability.",
+		body="All persistence should use PostgreSQL. **Why:** Battle-tested, excellent tooling.",
 	)
 	parsed = json.loads(result)
-	assert parsed["primitive"] == "decision"
+	assert parsed["type"] == "project"
 	assert Path(parsed["file_path"]).exists()
 	content = Path(parsed["file_path"]).read_text()
 	assert "Use PostgreSQL" in content
-	assert "confidence: 0.9" in content
+	assert "type: project" in content
 
 
-def test_write_memory_valid_learning(tmp_path):
-	"""Valid learning memory with kind should write correctly."""
+def test_write_memory_valid_feedback(tmp_path):
+	"""Valid feedback memory should write correctly."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="learning",
-		title="Queue heartbeat pattern",
-		body="Keep heartbeat updates deterministic.",
-		confidence=0.8,
-		tags="queue,reliability",
-		kind="insight",
+		type="feedback",
+		name="Queue heartbeat pattern",
+		description="Keep heartbeat updates deterministic for reliability.",
+		body="Keep heartbeat updates deterministic. **Why:** Non-deterministic heartbeats caused flaky tests.",
 	)
 	parsed = json.loads(result)
-	assert parsed["primitive"] == "learning"
+	assert parsed["type"] == "feedback"
 	assert Path(parsed["file_path"]).exists()
 	content = Path(parsed["file_path"]).read_text()
-	assert "kind: insight" in content
+	assert "type: feedback" in content
+	assert "name: Queue heartbeat pattern" in content
 
 
-def test_write_memory_persists_rich_metadata(tmp_path):
-	"""write_memory should persist source_speaker, durability, and outcome."""
+def test_write_memory_valid_user(tmp_path):
+	"""Valid user memory should write correctly."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="learning",
-		title="Queue retries can fail safely",
-		body="Use bounded retries for flaky queue workers.",
-		confidence=0.85,
-		tags="queue,reliability",
-		kind="pitfall",
-		source_speaker="user",
-		durability="permanent",
-		outcome="worked",
+		type="user",
+		name="Prefers concise output",
+		description="User wants terse responses, no padding.",
+		body="User prefers concise, direct output. **Why:** Saves time and avoids noise.",
 	)
 	parsed = json.loads(result)
+	assert parsed["type"] == "user"
 	content = Path(parsed["file_path"]).read_text()
-	assert "source_speaker: user" in content
-	assert "durability: permanent" in content
-	assert "outcome: worked" in content
+	assert "type: user" in content
 
 
-def test_write_memory_tags_parsed(tmp_path):
-	"""Comma-separated tags string should be parsed into list."""
+def test_write_memory_valid_reference(tmp_path):
+	"""Valid reference memory should write correctly."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="decision",
-		title="Tag test",
-		body="Testing tags.",
-		tags="alpha, beta, gamma",
+		type="reference",
+		name="Logfire tracing dashboard",
+		description="Logfire dashboard URL for observability.",
+		body="Logfire tracing at https://logfire.pydantic.dev. Used for DSPy span analysis.",
 	)
 	parsed = json.loads(result)
+	assert parsed["type"] == "reference"
 	content = Path(parsed["file_path"]).read_text()
-	assert "alpha" in content
-	assert "beta" in content
-	assert "gamma" in content
+	assert "type: reference" in content
 
 
-def test_write_memory_default_confidence(tmp_path):
-	"""Default confidence should be 0.8."""
+def test_write_memory_frontmatter_fields(tmp_path):
+	"""write_memory should persist name, description, type in frontmatter."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="decision",
-		title="Default confidence test",
-		body="Should default to 0.8.",
+		type="project",
+		name="Queue retries can fail safely",
+		description="Use bounded retries for flaky queue workers.",
+		body="Use bounded retries for flaky queue workers. **Why:** Unbounded retries caused cascading failures.",
 	)
 	parsed = json.loads(result)
 	content = Path(parsed["file_path"]).read_text()
-	assert "confidence: 0.8" in content
+	assert "name: Queue retries can fail safely" in content
+	assert "description: Use bounded retries for flaky queue workers." in content
+	assert "type: project" in content
+	# Old fields must NOT be present
+	assert "confidence:" not in content
+	assert "primitive:" not in content
+	assert "kind:" not in content
+	assert "tags:" not in content
+
+
+def test_write_memory_flat_directory(tmp_path):
+	"""write_memory should write files directly in memory_root (no subdirs)."""
+	ctx = _make_ctx(tmp_path)
+	result = write_memory(
+		ctx,
+		type="feedback",
+		name="Flat dir test",
+		description="Memory should be in flat directory.",
+		body="Memories are stored flat under memory_root. No subdirectories by type.",
+	)
+	parsed = json.loads(result)
+	file_path = Path(parsed["file_path"])
+	# File should be directly in memory_root, not in a subdirectory
+	assert file_path.parent == ctx.memory_root
 
 
 # ---------------------------------------------------------------------------
@@ -152,100 +163,61 @@ def test_write_memory_default_confidence(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_write_memory_invalid_primitive(tmp_path):
-	"""Invalid primitive should return an ERROR string."""
+def test_write_memory_invalid_type(tmp_path):
+	"""Invalid type should return an ERROR string."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="fact",
-		title="Bad",
-		body="Bad",
+		type="fact",
+		name="Bad",
+		description="Bad description.",
+		body="Bad body content here.",
 	)
 	assert result.startswith("ERROR:")
-	assert "decision" in result
-	assert "learning" in result
+	assert "user" in result
+	assert "feedback" in result
 
 
-def test_write_memory_learning_missing_kind(tmp_path):
-	"""Learning without kind should return an ERROR string."""
+def test_write_memory_empty_name(tmp_path):
+	"""Empty name should return an ERROR string."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="learning",
-		title="Missing kind",
-		body="Should fail.",
+		type="project",
+		name="",
+		description="Some description.",
+		body="No name provided.",
 	)
 	assert result.startswith("ERROR:")
-	assert "kind" in result
+	assert "name" in result
 
 
-def test_write_memory_learning_invalid_kind(tmp_path):
-	"""Learning with invalid kind should return an ERROR string."""
+def test_write_memory_empty_description(tmp_path):
+	"""Empty description should return an ERROR string."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="learning",
-		title="Bad kind",
-		body="Should fail.",
-		kind="tip",
+		type="project",
+		name="No description test",
+		description="",
+		body="Missing description.",
 	)
 	assert result.startswith("ERROR:")
-	assert "kind" in result
+	assert "description" in result
 
 
-def test_write_memory_invalid_source_speaker(tmp_path):
-	"""Unknown source_speaker should return an ERROR string."""
+def test_write_memory_empty_body(tmp_path):
+	"""Empty body should return an ERROR string."""
 	ctx = _make_ctx(tmp_path)
 	result = write_memory(
 		ctx,
-		primitive="decision",
-		title="Bad source speaker",
-		body="Should fail.",
-		source_speaker="system",
+		type="project",
+		name="No body test",
+		description="This has no body.",
+		body="",
 	)
 	assert result.startswith("ERROR:")
-	assert "source_speaker" in result
-
-
-def test_write_memory_empty_title(tmp_path):
-	"""Empty title should return an ERROR string."""
-	ctx = _make_ctx(tmp_path)
-	result = write_memory(
-		ctx,
-		primitive="decision",
-		title="",
-		body="No title.",
-	)
-	assert result.startswith("ERROR:")
-	assert "title" in result
-
-
-def test_write_memory_confidence_out_of_range(tmp_path):
-	"""Confidence > 1.0 should return an ERROR string."""
-	ctx = _make_ctx(tmp_path)
-	result = write_memory(
-		ctx,
-		primitive="decision",
-		title="Bad confidence",
-		body="Too high.",
-		confidence=1.5,
-	)
-	assert result.startswith("ERROR:")
-	assert "confidence" in result
-
-
-def test_write_memory_confidence_negative(tmp_path):
-	"""Negative confidence should return an ERROR string."""
-	ctx = _make_ctx(tmp_path)
-	result = write_memory(
-		ctx,
-		primitive="decision",
-		title="Negative conf",
-		body="Too low.",
-		confidence=-0.1,
-	)
-	assert result.startswith("ERROR:")
-	assert "confidence" in result
+	assert "body" in result
 
 
 def test_write_memory_no_memory_root(tmp_path):
@@ -256,9 +228,10 @@ def test_write_memory_no_memory_root(tmp_path):
 	)
 	result = write_memory(
 		ctx,
-		primitive="decision",
-		title="No root",
-		body="Should fail.",
+		type="project",
+		name="No root",
+		description="Should fail without memory_root.",
+		body="Should fail because memory_root is not set.",
 	)
 	assert result.startswith("ERROR:")
 	assert "memory_root" in result
@@ -309,7 +282,7 @@ def test_write_report_invalid_json(tmp_path):
 def test_read_file_from_memory_root(tmp_path):
 	"""read_file should read files within memory_root."""
 	ctx = _make_ctx(tmp_path)
-	test_file = ctx.memory_root / "decisions" / "test.md"
+	test_file = ctx.memory_root / "test-decision.md"
 	test_file.write_text("# Test Decision\nSome content.")
 	result = read_file(ctx, file_path=str(test_file))
 	assert "Test Decision" in result
@@ -318,7 +291,7 @@ def test_read_file_from_memory_root(tmp_path):
 def test_read_file_from_run_folder(tmp_path):
 	"""read_file should read files within run_folder."""
 	ctx = _make_ctx(tmp_path)
-	test_file = ctx.run_folder / "extract.json"
+	test_file = ctx.run_folder / "test_data.json"
 	test_file.write_text('{"candidates": []}')
 	result = read_file(ctx, file_path=str(test_file))
 	assert "candidates" in result
@@ -348,9 +321,9 @@ def test_read_file_not_found(tmp_path):
 def test_list_files_in_memory_root(tmp_path):
 	"""list_files should list files in memory directories."""
 	ctx = _make_ctx(tmp_path)
-	(ctx.memory_root / "decisions" / "a.md").write_text("# A")
-	(ctx.memory_root / "decisions" / "b.md").write_text("# B")
-	result = list_files(ctx, directory=str(ctx.memory_root / "decisions"))
+	(ctx.memory_root / "a.md").write_text("# A")
+	(ctx.memory_root / "b.md").write_text("# B")
+	result = list_files(ctx, directory=str(ctx.memory_root))
 	files = json.loads(result)
 	assert len(files) == 2
 
@@ -358,7 +331,7 @@ def test_list_files_in_memory_root(tmp_path):
 def test_list_files_empty_dir(tmp_path):
 	"""list_files should return empty list for empty directory."""
 	ctx = _make_ctx(tmp_path)
-	result = list_files(ctx, directory=str(ctx.memory_root / "decisions"))
+	result = list_files(ctx, directory=str(ctx.memory_root))
 	files = json.loads(result)
 	assert files == []
 
@@ -381,11 +354,11 @@ def test_list_files_outside_roots(tmp_path):
 def test_list_files_with_pattern(tmp_path):
 	"""list_files should filter by glob pattern."""
 	ctx = _make_ctx(tmp_path)
-	(ctx.memory_root / "decisions" / "a.md").write_text("# A")
-	(ctx.memory_root / "decisions" / "b.json").write_text("{}")
+	(ctx.memory_root / "a.md").write_text("# A")
+	(ctx.memory_root / "b.json").write_text("{}")
 	result = list_files(
 		ctx,
-		directory=str(ctx.memory_root / "decisions"),
+		directory=str(ctx.memory_root),
 		pattern="*.json",
 	)
 	files = json.loads(result)
@@ -398,32 +371,18 @@ def test_list_files_with_pattern(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_archive_memory_decision(tmp_path):
-	"""archive_memory should move a decision file to archived/decisions/."""
+def test_archive_memory_flat(tmp_path):
+	"""archive_memory should move a flat memory file to archived/."""
 	ctx = _make_ctx(tmp_path)
-	src = ctx.memory_root / "decisions" / "test-decision.md"
-	src.write_text("---\ntitle: Test\n---\nBody")
+	src = ctx.memory_root / "20260327-test-decision.md"
+	src.write_text("---\nname: Test\ntype: project\n---\nBody")
 	result = archive_memory(ctx, file_path=str(src))
 	parsed = json.loads(result)
 	assert parsed["archived"] is True
 	assert not src.exists()
 	target = Path(parsed["target"])
 	assert target.exists()
-	assert "archived/decisions/test-decision.md" in str(target)
-
-
-def test_archive_memory_learning(tmp_path):
-	"""archive_memory should move a learning file to archived/learnings/."""
-	ctx = _make_ctx(tmp_path)
-	src = ctx.memory_root / "learnings" / "test-learning.md"
-	src.write_text("---\ntitle: Test Learning\n---\nBody")
-	result = archive_memory(ctx, file_path=str(src))
-	parsed = json.loads(result)
-	assert parsed["archived"] is True
-	assert not src.exists()
-	target = Path(parsed["target"])
-	assert target.exists()
-	assert "archived/learnings/test-learning.md" in str(target)
+	assert "archived/20260327-test-decision.md" in str(target)
 
 
 def test_archive_memory_outside_memory_root(tmp_path):
@@ -439,20 +398,10 @@ def test_archive_memory_not_found(tmp_path):
 	ctx = _make_ctx(tmp_path)
 	result = archive_memory(
 		ctx,
-		file_path=str(ctx.memory_root / "decisions" / "gone.md"),
+		file_path=str(ctx.memory_root / "gone.md"),
 	)
 	assert result.startswith("ERROR:")
 	assert "not found" in result
-
-
-def test_archive_memory_wrong_subfolder(tmp_path):
-	"""archive_memory should reject files not under decisions/ or learnings/."""
-	ctx = _make_ctx(tmp_path)
-	bad = ctx.memory_root / "summaries" / "summary.md"
-	bad.write_text("# Summary")
-	result = archive_memory(ctx, file_path=str(bad))
-	assert result.startswith("ERROR:")
-	assert "decisions" in result or "learnings" in result
 
 
 def test_archive_memory_no_memory_root(tmp_path):
@@ -471,9 +420,9 @@ def test_archive_memory_no_memory_root(tmp_path):
 def test_edit_memory_updates_content(tmp_path):
 	"""edit_memory should replace file content."""
 	ctx = _make_ctx(tmp_path)
-	target = ctx.memory_root / "decisions" / "edit-test.md"
-	target.write_text("---\ntitle: Old\nconfidence: 0.5\n---\nOld body")
-	new_content = "---\ntitle: Old\nconfidence: 0.9\ntags: [updated]\n---\nNew body"
+	target = ctx.memory_root / "edit-test.md"
+	target.write_text("---\nname: Old\ntype: project\n---\nOld body")
+	new_content = "---\nname: Old\ntype: project\ndescription: Updated\n---\nNew body"
 	result = edit_memory(ctx, file_path=str(target), new_content=new_content)
 	parsed = json.loads(result)
 	assert parsed["edited"] is True
@@ -483,8 +432,8 @@ def test_edit_memory_updates_content(tmp_path):
 def test_edit_memory_rejects_no_frontmatter(tmp_path):
 	"""edit_memory should reject content without YAML frontmatter."""
 	ctx = _make_ctx(tmp_path)
-	target = ctx.memory_root / "decisions" / "edit-test.md"
-	target.write_text("---\ntitle: Old\n---\nBody")
+	target = ctx.memory_root / "edit-test.md"
+	target.write_text("---\nname: Old\n---\nBody")
 	result = edit_memory(
 		ctx,
 		file_path=str(target),
@@ -511,8 +460,8 @@ def test_edit_memory_not_found(tmp_path):
 	ctx = _make_ctx(tmp_path)
 	result = edit_memory(
 		ctx,
-		file_path=str(ctx.memory_root / "decisions" / "gone.md"),
-		new_content="---\ntitle: Gone\n---\nBody",
+		file_path=str(ctx.memory_root / "gone.md"),
+		new_content="---\nname: Gone\n---\nBody",
 	)
 	assert result.startswith("ERROR:")
 	assert "not found" in result
@@ -531,432 +480,101 @@ def test_edit_memory_no_memory_root(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# write_hot_memory tests
-# ---------------------------------------------------------------------------
-
-
-def test_write_hot_memory_creates_file(tmp_path):
-	"""write_hot_memory should write hot-memory.md at memory_root.parent."""
-	ctx = _make_ctx(tmp_path)
-	content = "# Hot Memory\n\n## Active Decisions\n- Use PostgreSQL\n"
-	result = write_hot_memory(ctx, content=content)
-	parsed = json.loads(result)
-	assert parsed["written"] is True
-	hot_path = Path(parsed["file_path"])
-	assert hot_path.exists()
-	assert hot_path.name == "hot-memory.md"
-	assert hot_path.read_text() == content
-	# Should be at memory_root.parent, not inside memory_root
-	assert hot_path.parent == ctx.memory_root.parent
-
-
-def test_write_hot_memory_overwrites(tmp_path):
-	"""write_hot_memory should overwrite existing hot-memory.md."""
-	ctx = _make_ctx(tmp_path)
-	hot_path = ctx.memory_root.parent / "hot-memory.md"
-	hot_path.write_text("old content")
-	new_content = "# Hot Memory\n\nNew content"
-	result = write_hot_memory(ctx, content=new_content)
-	parsed = json.loads(result)
-	assert parsed["written"] is True
-	assert hot_path.read_text() == new_content
-
-
-def test_write_hot_memory_no_memory_root(tmp_path):
-	"""write_hot_memory should error when memory_root is not set."""
-	ctx = build_context(repo_root=tmp_path, config=make_config(tmp_path))
-	result = write_hot_memory(ctx, content="# Hot Memory")
-	assert result.startswith("ERROR:")
-	assert "memory_root" in result
-
-
-# ---------------------------------------------------------------------------
-# memory_search tests
+# scan_memory_manifest tests
 # ---------------------------------------------------------------------------
 
 
 def _write_test_memory(
-	memory_root, subdir, memory_id, title, body, tags=None, kind=None,
+	memory_root, memory_id, name, body, mem_type="project",
 ):
-	"""Write a minimal memory markdown file for testing."""
-	tags = tags or []
-	tag_lines = "\n".join(f"- {t}" for t in tags)
-	tag_block = f"tags:\n{tag_lines}" if tags else "tags: []"
-	kind_line = f"kind: {kind}\n" if kind else ""
+	"""Write a minimal memory markdown file for testing (flat directory)."""
 	content = f"""---
 id: {memory_id}
-title: {title}
-{tag_block}
-confidence: 0.8
-primitive: {"decision" if subdir == "decisions" else "learning"}
-{kind_line}created: '2026-03-27T00:00:00+00:00'
+name: {name}
+description: {name}
+type: {mem_type}
+created: '2026-03-27T00:00:00+00:00'
 updated: '2026-03-27T00:00:00+00:00'
 source: test-run
 ---
 
 {body}
 """
-	path = memory_root / subdir / f"20260327-{memory_id}.md"
+	path = memory_root / f"20260327-{memory_id}.md"
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text(content, encoding="utf-8")
 	return path
 
 
-def test_memory_search_scan_mode(tmp_path):
-	"""memory_search mode=scan returns all memories."""
+def test_scan_memory_manifest_returns_all(tmp_path):
+	"""scan_memory_manifest returns metadata for all .md files except MEMORY.md."""
 	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "learnings", "pytest-tips",
-		"Pytest tips", "Use fixtures.", tags=["testing"], kind="insight",
-	)
+	_write_test_memory(ctx.memory_root, "use-postgres", "Use PostgreSQL", "Chose PostgreSQL.")
+	_write_test_memory(ctx.memory_root, "pytest-tips", "Pytest tips", "Use fixtures.", mem_type="feedback")
+	# MEMORY.md should be excluded
+	(ctx.memory_root / "MEMORY.md").write_text("# Index\n")
 
-	result = memory_search(ctx, query="", mode="scan")
-	parsed = json.loads(result)
-	assert parsed["mode"] == "scan"
-	assert parsed["count"] == 2
-
-
-def test_memory_search_keyword_mode(tmp_path):
-	"""memory_search mode=keyword searches by keyword."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL for persistence.",
-		tags=["database"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "learnings", "pytest-tips",
-		"Pytest tips", "Use fixtures for testing.",
-		tags=["testing"], kind="insight",
-	)
-	# Reindex so FTS data is available
-	from lerim.memory.memory_index import MemoryIndex
-	idx = MemoryIndex(ctx.config.memories_db_path)
-	idx.ensure_schema()
-	idx.reindex_directory(ctx.memory_root)
-
-	result = memory_search(ctx, query="PostgreSQL", mode="keyword")
-	parsed = json.loads(result)
-	assert parsed["mode"] == "keyword"
-	assert parsed["count"] >= 1
-	assert any(
-		"postgres" in r.get("memory_id", "").lower()
-		or "PostgreSQL" in r.get("title", "")
-		for r in parsed["results"]
-	)
-
-
-def test_memory_search_similar_mode(tmp_path):
-	"""memory_search mode=similar finds similar memories."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "deploy-k8s",
-		"Kubernetes deployment", "Deploy to K8s.",
-		tags=["deployment"],
-	)
-	from lerim.memory.memory_index import MemoryIndex
-	idx = MemoryIndex(ctx.config.memories_db_path)
-	idx.ensure_schema()
-	idx.reindex_directory(ctx.memory_root)
-
-	result = memory_search(
-		ctx, query="container deployment", mode="similar",
-		title="Container deploy", body="Deploy containers.",
-	)
-	parsed = json.loads(result)
-	assert parsed["mode"] == "similar"
-	assert parsed["count"] >= 1
-
-
-def test_memory_search_clusters_mode(tmp_path):
-	"""memory_search mode=clusters finds tag-based clusters."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "deploy-k8s",
-		"K8s deploy", "Deploy to K8s.",
-		tags=["deployment", "k8s"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "deploy-strategy",
-		"Blue-green deploy", "Use blue-green.",
-		tags=["deployment", "infra"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "learnings", "deploy-rollback",
-		"Rollback procedures", "Always have rollback.",
-		tags=["deployment", "reliability"], kind="procedure",
-	)
-
-	result = memory_search(ctx, query="", mode="clusters")
-	parsed = json.loads(result)
-	assert parsed["mode"] == "clusters"
-	assert parsed["cluster_count"] >= 1
-
-
-def test_memory_search_scan_mode_with_primitive(tmp_path):
-	"""memory_search mode=scan with primitive filter returns only matching type."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "learnings", "pytest-tips",
-		"Pytest tips", "Use fixtures.", tags=["testing"], kind="insight",
-	)
-
-	result = memory_search(ctx, query="", mode="scan", primitive="decision")
-	parsed = json.loads(result)
-	assert parsed["mode"] == "scan"
-	assert parsed["count"] == 1
-	assert parsed["memories"][0]["primitive"] == "decision"
-
-
-def test_memory_search_scan_mode_includes_reindex_stats(tmp_path):
-	"""memory_search mode=scan should include reindex stats in response."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-
-	result = memory_search(ctx, query="", mode="scan")
-	parsed = json.loads(result)
-	assert "reindex" in parsed
-	assert "indexed" in parsed["reindex"]
-
-
-def test_memory_search_keyword_mode_with_primitive(tmp_path):
-	"""memory_search mode=keyword with primitive filter returns only matching type."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL for persistence.",
-		tags=["database"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "learnings", "postgres-tips",
-		"PostgreSQL tips", "Use connection pooling.",
-		tags=["database"], kind="insight",
-	)
-	from lerim.memory.memory_index import MemoryIndex
-	idx = MemoryIndex(ctx.config.memories_db_path)
-	idx.ensure_schema()
-	idx.reindex_directory(ctx.memory_root)
-
-	result = memory_search(
-		ctx, query="PostgreSQL", mode="keyword", primitive="learning",
-	)
-	parsed = json.loads(result)
-	assert parsed["mode"] == "keyword"
-	for r in parsed["results"]:
-		assert r.get("primitive") == "learning"
-
-
-def test_memory_search_similar_mode_with_tags(tmp_path):
-	"""memory_search mode=similar should pass tags for better matching."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "deploy-k8s",
-		"Kubernetes deployment", "Deploy to K8s.",
-		tags=["deployment", "k8s"],
-	)
-	from lerim.memory.memory_index import MemoryIndex
-	idx = MemoryIndex(ctx.config.memories_db_path)
-	idx.ensure_schema()
-	idx.reindex_directory(ctx.memory_root)
-
-	result = memory_search(
-		ctx, query="", mode="similar",
-		title="K8s deploy", body="Deploy containers to Kubernetes.",
-		tags="deployment,k8s",
-	)
-	parsed = json.loads(result)
-	assert parsed["mode"] == "similar"
-	assert parsed["count"] >= 1
-
-
-def test_memory_search_clusters_mode_with_min_group_size(tmp_path):
-	"""memory_search mode=clusters should respect min_group_size parameter."""
-	ctx = _make_ctx(tmp_path)
-	# Create 2 memories with shared tag -- below default min_group_size of 3
-	_write_test_memory(
-		ctx.memory_root, "decisions", "deploy-k8s",
-		"K8s deploy", "Deploy to K8s.", tags=["deployment"],
-	)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "deploy-strategy",
-		"Blue-green deploy", "Use blue-green.", tags=["deployment"],
-	)
-
-	# With min_group_size=3 (default), no clusters
-	result = memory_search(ctx, query="", mode="clusters", min_group_size=3)
-	parsed = json.loads(result)
-	assert parsed["cluster_count"] == 0
-
-	# With min_group_size=2, should find cluster
-	result = memory_search(ctx, query="", mode="clusters", min_group_size=2)
-	parsed = json.loads(result)
-	assert parsed["cluster_count"] >= 1
-
-
-def test_memory_search_unknown_mode(tmp_path):
-	"""memory_search with unknown mode returns error."""
-	ctx = _make_ctx(tmp_path)
-	result = memory_search(ctx, query="test", mode="bogus")
-	assert "Error" in result
-	assert "unknown mode" in result
-
-
-def test_memory_search_no_memory_root(tmp_path):
-	"""memory_search without memory_root returns error."""
-	ctx = build_context(repo_root=tmp_path, config=make_config(tmp_path))
-	result = memory_search(ctx, query="test", mode="scan")
-	assert "Error" in result
-	assert "memory_root" in result
-
-
-# ---------------------------------------------------------------------------
-# batch_dedup_candidates tests
-# ---------------------------------------------------------------------------
-
-
-def test_batch_dedup_with_list(tmp_path):
-	"""batch_dedup_candidates handles JSON array of candidates."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-
-	candidates = [
-		{
-			"title": "Use PostgreSQL for data",
-			"body": "PostgreSQL is our primary database.",
-			"tags": ["database"],
-		},
-		{
-			"title": "Redis caching",
-			"body": "Use Redis for caching.",
-			"tags": ["caching"],
-		},
-	]
-
-	result = batch_dedup_candidates(
-		ctx, candidates_json=json.dumps(candidates),
-	)
+	result = scan_memory_manifest(ctx)
 	parsed = json.loads(result)
 	assert parsed["count"] == 2
-	assert len(parsed["results"]) == 2
-	# Each result should have candidate + similar_existing + top_similarity
-	for r in parsed["results"]:
-		assert "candidate" in r
-		assert "similar_existing" in r
-		assert "top_similarity" in r
-	assert parsed["results"][0]["top_similarity"] > 0
-	if parsed["results"][0]["similar_existing"]:
-		top = parsed["results"][0]["similar_existing"][0]
-		assert "fused_score" in top
-		assert "similarity" in top
-		assert "lexical_similarity" in top
+	names = {m["name"] for m in parsed["memories"]}
+	assert "Use PostgreSQL" in names
+	assert "Pytest tips" in names
 
 
-def test_batch_dedup_with_dict_candidates_key(tmp_path):
-	"""batch_dedup_candidates handles dict with 'candidates' key."""
+def test_scan_memory_manifest_empty(tmp_path):
+	"""scan_memory_manifest on empty memory_root returns count 0."""
 	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-
-	data = {"candidates": [
-		{
-			"title": "Database choice",
-			"body": "Use PostgreSQL.",
-			"tags": ["database"],
-		},
-	]}
-
-	result = batch_dedup_candidates(
-		ctx, candidates_json=json.dumps(data),
-	)
-	parsed = json.loads(result)
-	assert parsed["count"] == 1
-
-
-def test_batch_dedup_with_dict_memories_key(tmp_path):
-	"""batch_dedup_candidates handles dict with 'memories' key."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-
-	data = {"memories": [
-		{
-			"title": "Database choice",
-			"body": "Use PostgreSQL.",
-			"tags": ["database"],
-		},
-	]}
-
-	result = batch_dedup_candidates(
-		ctx, candidates_json=json.dumps(data),
-	)
-	parsed = json.loads(result)
-	assert parsed["count"] == 1
-
-
-def test_batch_dedup_invalid_json(tmp_path):
-	"""batch_dedup_candidates returns error for invalid JSON."""
-	ctx = _make_ctx(tmp_path)
-	result = batch_dedup_candidates(ctx, candidates_json="not valid json")
-	assert "Error" in result
-	assert "invalid JSON" in result
-
-
-def test_batch_dedup_no_memory_root(tmp_path):
-	"""batch_dedup_candidates without memory_root returns error."""
-	ctx = build_context(repo_root=tmp_path, config=make_config(tmp_path))
-	result = batch_dedup_candidates(ctx, candidates_json="[]")
-	assert "Error" in result
-	assert "memory_root" in result
-
-
-def test_batch_dedup_empty_candidates(tmp_path):
-	"""batch_dedup_candidates with empty list returns zero results."""
-	ctx = _make_ctx(tmp_path)
-	result = batch_dedup_candidates(ctx, candidates_json="[]")
+	result = scan_memory_manifest(ctx)
 	parsed = json.loads(result)
 	assert parsed["count"] == 0
-	assert parsed["results"] == []
+	assert parsed["memories"] == []
 
 
-def test_batch_dedup_tags_as_string(tmp_path):
-	"""batch_dedup_candidates handles tags as string (not list)."""
-	ctx = _make_ctx(tmp_path)
-	_write_test_memory(
-		ctx.memory_root, "decisions", "use-postgres",
-		"Use PostgreSQL", "Chose PostgreSQL.", tags=["database"],
-	)
-
-	candidates = [
-		{
-			"title": "DB choice",
-			"body": "Use PostgreSQL.",
-			"tags": "database,persistence",
-		},
-	]
-
-	result = batch_dedup_candidates(
-		ctx, candidates_json=json.dumps(candidates),
-	)
+def test_scan_memory_manifest_no_memory_root(tmp_path):
+	"""scan_memory_manifest without memory_root returns error."""
+	ctx = build_context(repo_root=tmp_path, config=make_config(tmp_path))
+	result = scan_memory_manifest(ctx)
 	parsed = json.loads(result)
-	assert parsed["count"] == 1
+	assert "error" in parsed
+
+
+# ---------------------------------------------------------------------------
+# update_memory_index tests
+# ---------------------------------------------------------------------------
+
+
+def test_update_memory_index_writes_file(tmp_path):
+	"""update_memory_index should write MEMORY.md."""
+	ctx = _make_ctx(tmp_path)
+	content = "- [Use PostgreSQL](use-postgres.md) -- Primary database choice"
+	result = update_memory_index(content, ctx)
+	parsed = json.loads(result)
+	assert parsed["lines"] >= 1
+	assert parsed["bytes"] > 0
+	index_path = Path(parsed["file_path"])
+	assert index_path.exists()
+	assert index_path.name == "MEMORY.md"
+	assert "Use PostgreSQL" in index_path.read_text()
+
+
+def test_update_memory_index_truncates_long(tmp_path):
+	"""update_memory_index should truncate content beyond 200 lines."""
+	ctx = _make_ctx(tmp_path)
+	lines = [f"- [Memory {i}](mem-{i}.md) -- description {i}" for i in range(250)]
+	content = "\n".join(lines)
+	result = update_memory_index(content, ctx)
+	parsed = json.loads(result)
+	# 200 original + 1 warning line + trailing newline
+	assert parsed["lines"] <= 203
+
+
+def test_update_memory_index_no_memory_root(tmp_path):
+	"""update_memory_index without memory_root returns error."""
+	ctx = build_context(repo_root=tmp_path, config=make_config(tmp_path))
+	result = update_memory_index("# Index", ctx)
+	parsed = json.loads(result)
+	assert "error" in parsed
 
 
 # ---------------------------------------------------------------------------
@@ -970,12 +588,9 @@ def test_partial_preserves_function_name(tmp_path):
 	bound = partial(write_memory, ctx)
 	assert bound.func.__name__ == "write_memory"
 
-	bound_search = partial(memory_search, ctx)
-	assert bound_search.func.__name__ == "memory_search"
-
 
 @pytest.mark.parametrize("bind_fn,expected_count", [
-	(bind_sync_tools, 7),
+	(bind_extract_tools, 8),
 	(bind_maintain_tools, 8),
 	(bind_ask_tools, 3),
 ])
@@ -994,10 +609,10 @@ def test_bind_tools_dspy_introspection(tmp_path):
 	"""dspy.Tool should see correct names and args from bound tools."""
 	import dspy
 	ctx = _make_ctx(tmp_path)
-	tools = bind_sync_tools(ctx)
+	tools = bind_extract_tools(ctx)
 	expected_names = {
-		"extract_pipeline", "summarize_pipeline", "write_memory",
-		"write_report", "read_file", "list_files", "batch_dedup_candidates",
+		"read_file", "scan_memory_manifest", "write_memory", "write_summary",
+		"edit_memory", "update_memory_index", "list_files", "write_report",
 	}
 	seen_names = set()
 	for tool in tools:

@@ -4,7 +4,7 @@ Sends spans to Logfire cloud (free tier). Activated by ``tracing.enabled = true`
 in config or ``LERIM_TRACING=1``.
 
 Instruments DSPy pipelines (ReAct agents, extraction, summarisation) and
-optional httpx HTTP calls. Manual spans in daemon / runtime / extract_pipeline
+optional httpx HTTP calls. Manual spans in daemon / runtime
 provide orchestration context.
 """
 

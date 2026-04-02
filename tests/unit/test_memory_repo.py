@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lerim.memory.memory_repo import (
+from lerim.memory.repo import (
     build_memory_paths,
     ensure_memory_paths,
     reset_memory_root,
@@ -27,8 +27,6 @@ def test_build_memory_paths_structure(tmp_path):
     assert paths.memory_dir == tmp_path / "memory"
     assert paths.workspace_dir == tmp_path / "workspace"
     assert paths.index_dir == tmp_path / "index"
-    assert paths.memories_db_path == tmp_path / "index" / "memories.sqlite3"
-    assert paths.graph_db_path == tmp_path / "index" / "graph.sqlite3"
 
 
 def test_build_memory_paths_expands_user():
@@ -58,11 +56,9 @@ def test_ensure_memory_paths_creates_dirs(tmp_path):
     paths = build_memory_paths(tmp_path)
     ensure_memory_paths(paths)
 
-    assert (paths.memory_dir / "decisions").is_dir()
-    assert (paths.memory_dir / "learnings").is_dir()
+    assert paths.memory_dir.is_dir()
     assert (paths.memory_dir / "summaries").is_dir()
-    assert (paths.memory_dir / "archived" / "decisions").is_dir()
-    assert (paths.memory_dir / "archived" / "learnings").is_dir()
+    assert (paths.memory_dir / "archived").is_dir()
     assert paths.workspace_dir.is_dir()
     assert paths.index_dir.is_dir()
 
@@ -72,7 +68,7 @@ def test_ensure_memory_paths_idempotent(tmp_path):
     paths = build_memory_paths(tmp_path)
     ensure_memory_paths(paths)
     ensure_memory_paths(paths)
-    assert (paths.memory_dir / "decisions").is_dir()
+    assert paths.memory_dir.is_dir()
 
 
 def test_ensure_memory_paths_preserves_existing_files(tmp_path):
@@ -80,7 +76,7 @@ def test_ensure_memory_paths_preserves_existing_files(tmp_path):
     paths = build_memory_paths(tmp_path)
     ensure_memory_paths(paths)
 
-    test_file = paths.memory_dir / "decisions" / "test.md"
+    test_file = paths.memory_dir / "test.md"
     test_file.write_text("keep me", encoding="utf-8")
 
     ensure_memory_paths(paths)
@@ -98,7 +94,7 @@ def test_reset_removes_and_recreates(tmp_path):
     ensure_memory_paths(paths)
 
     # Create a file that should be removed
-    sentinel = paths.memory_dir / "learnings" / "20260228-test.md"
+    sentinel = paths.memory_dir / "20260228-test.md"
     sentinel.write_text("test content", encoding="utf-8")
     assert sentinel.exists()
 
@@ -106,7 +102,7 @@ def test_reset_removes_and_recreates(tmp_path):
 
     # File gone, but directory recreated
     assert not sentinel.exists()
-    assert (paths.memory_dir / "learnings").is_dir()
+    assert paths.memory_dir.is_dir()
     assert str(paths.memory_dir) in result["removed"]
 
 
@@ -130,7 +126,7 @@ def test_reset_on_empty_root(tmp_path):
     result = reset_memory_root(paths)
 
     # Should still create the structure
-    assert (paths.memory_dir / "decisions").is_dir()
+    assert paths.memory_dir.is_dir()
     assert result["removed"] == []
 
 
@@ -142,10 +138,8 @@ def test_reset_then_ensure_consistent(tmp_path):
     reset_memory_root(paths)
 
     # Verify same dirs exist as after a fresh ensure
-    assert (paths.memory_dir / "decisions").is_dir()
-    assert (paths.memory_dir / "learnings").is_dir()
+    assert paths.memory_dir.is_dir()
     assert (paths.memory_dir / "summaries").is_dir()
-    assert (paths.memory_dir / "archived" / "decisions").is_dir()
-    assert (paths.memory_dir / "archived" / "learnings").is_dir()
+    assert (paths.memory_dir / "archived").is_dir()
     assert paths.workspace_dir.is_dir()
     assert paths.index_dir.is_dir()

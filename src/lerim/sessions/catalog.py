@@ -134,16 +134,6 @@ def init_sessions_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_session_docs_time ON session_docs (start_time)"
         )
 
-        # Additive migration: add content_hash column to existing DBs.
-        sd_columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(session_docs)").fetchall()
-        }
-        if "content_hash" not in sd_columns:
-            conn.execute("ALTER TABLE session_docs ADD COLUMN content_hash TEXT")
-        if "repo_path" not in sd_columns:
-            conn.execute("ALTER TABLE session_docs ADD COLUMN repo_path TEXT")
-
         conn.execute(
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
@@ -203,6 +193,7 @@ def init_sessions_db() -> None:
                 error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                repo_path TEXT,
                 UNIQUE(run_id, job_type)
             )
             """
@@ -213,74 +204,8 @@ def init_sessions_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_jobs_updated ON session_jobs (updated_at)"
         )
-        columns = {
-            str(row["name"]): str(row["type"])
-            for row in conn.execute("PRAGMA table_info(session_jobs)").fetchall()
-        }
-        additive_columns = {
-            "job_type": "TEXT NOT NULL DEFAULT 'extract'",
-            "agent_type": "TEXT",
-            "session_path": "TEXT",
-            "start_time": "TEXT",
-            "status": "TEXT NOT NULL DEFAULT 'pending'",
-            "attempts": "INTEGER DEFAULT 0",
-            "max_attempts": "INTEGER DEFAULT 3",
-            "trigger": "TEXT",
-            "available_at": "TEXT",
-            "claimed_at": "TEXT",
-            "completed_at": "TEXT",
-            "heartbeat_at": "TEXT",
-            "error": "TEXT",
-            "created_at": "TEXT",
-            "updated_at": "TEXT",
-            "repo_path": "TEXT",
-        }
-        for name, ddl in additive_columns.items():
-            if name in columns:
-                continue
-            conn.execute(f"ALTER TABLE session_jobs ADD COLUMN {name} {ddl}")
-        # repo_path index must be created after the column is ensured above.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_jobs_repo ON session_jobs (repo_path)"
-        )
-        # Backfill non-null-ish defaults for older rows.
-        now = _iso_now()
-        conn.execute(
-            "UPDATE session_jobs SET job_type = ? WHERE job_type IS NULL OR job_type = ''",
-            (JOB_TYPE_EXTRACT,),
-        )
-        conn.execute(
-            "UPDATE session_jobs SET status = ? WHERE status IS NULL OR status = ''",
-            (JOB_STATUS_PENDING,),
-        )
-        conn.execute(
-            "UPDATE session_jobs SET available_at = ? WHERE available_at IS NULL OR available_at = ''",
-            (now,),
-        )
-        conn.execute(
-            "UPDATE session_jobs SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
-            (now,),
-        )
-        conn.execute(
-            "UPDATE session_jobs SET updated_at = ? WHERE updated_at IS NULL OR updated_at = ''",
-            (now,),
-        )
-        conn.execute(
-            "UPDATE session_jobs SET status = ? WHERE status = 'queued'",
-            (JOB_STATUS_PENDING,),
-        )
-        conn.execute(
-            "UPDATE session_jobs SET status = ? WHERE status = 'completed'",
-            (JOB_STATUS_DONE,),
-        )
-        # Purge orphaned jobs that have no project match (NULL/empty
-        # repo_path).  These can never be processed and just clog the
-        # claim queue.
-        conn.execute(
-            "UPDATE session_jobs SET status = ? "
-            "WHERE (repo_path IS NULL OR repo_path = '') "
-            "AND status IN (?, ?)",
-            (JOB_STATUS_DONE, JOB_STATUS_PENDING, JOB_STATUS_FAILED),
         )
 
         conn.execute(
@@ -689,46 +614,15 @@ def claim_session_jobs(
     limit: int = 20,
     run_ids: list[str] | None = None,
     job_type: str = JOB_TYPE_EXTRACT,
-    timeout_seconds: int = 300,
 ) -> list[dict[str, Any]]:
-    """Claim available jobs, recycle stale running jobs, and mark claimed rows."""
+    """Claim available jobs and mark claimed rows as running."""
     _ensure_sessions_db_initialized()
     limit = max(1, int(limit))
     now = _utc_now()
     now_iso = now.isoformat()
-    timeout_cutoff = (
-        now - timedelta(seconds=max(30, int(timeout_seconds)))
-    ).isoformat()
 
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-
-        stale_rows = conn.execute(
-            """
-            SELECT id, attempts, max_attempts
-            FROM session_jobs
-            WHERE status = ?
-              AND COALESCE(heartbeat_at, claimed_at) IS NOT NULL
-              AND COALESCE(heartbeat_at, claimed_at) < ?
-            """,
-            (JOB_STATUS_RUNNING, timeout_cutoff),
-        ).fetchall()
-        for stale in stale_rows:
-            attempts = int(stale.get("attempts") or 0)
-            max_attempts = int(stale.get("max_attempts") or 3)
-            new_status = (
-                JOB_STATUS_DEAD_LETTER
-                if attempts >= max_attempts
-                else JOB_STATUS_PENDING
-            )
-            conn.execute(
-                """
-                UPDATE session_jobs
-                SET status = ?, available_at = ?, claimed_at = NULL, heartbeat_at = NULL, updated_at = ?
-                WHERE id = ?
-                """,
-                (new_status, now_iso, now_iso, int(stale.get("id") or 0)),
-            )
 
         # Per-project ordered claiming: partition by repo_path, pick only
         # the oldest non-terminal job per project.  If that oldest job is
@@ -785,39 +679,19 @@ def claim_session_jobs(
             conn.execute(
                 """
                 UPDATE session_jobs
-                SET status = ?, attempts = ?, claimed_at = ?, heartbeat_at = ?, updated_at = ?
+                SET status = ?, attempts = ?, claimed_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (JOB_STATUS_RUNNING, attempts, now_iso, now_iso, now_iso, job_id),
+                (JOB_STATUS_RUNNING, attempts, now_iso, now_iso, job_id),
             )
             row["attempts"] = attempts
             row["status"] = JOB_STATUS_RUNNING
             row["claimed_at"] = now_iso
-            row["heartbeat_at"] = now_iso
             row["updated_at"] = now_iso
             claimed.append(row)
 
         conn.commit()
     return claimed
-
-
-def heartbeat_session_job(run_id: str, *, job_type: str = JOB_TYPE_EXTRACT) -> bool:
-    """Update heartbeat timestamp for one running queue job."""
-    if not run_id:
-        return False
-    _ensure_sessions_db_initialized()
-    now = _iso_now()
-    with _connect() as conn:
-        cursor = conn.execute(
-            """
-            UPDATE session_jobs
-            SET heartbeat_at = ?, updated_at = ?
-            WHERE run_id = ? AND job_type = ? AND status = ?
-            """,
-            (now, now, run_id, job_type, JOB_STATUS_RUNNING),
-        )
-        conn.commit()
-    return int(cursor.rowcount or 0) > 0
 
 
 def complete_session_job(run_id: str, *, job_type: str = JOB_TYPE_EXTRACT) -> bool:
@@ -830,10 +704,10 @@ def complete_session_job(run_id: str, *, job_type: str = JOB_TYPE_EXTRACT) -> bo
         cursor = conn.execute(
             """
             UPDATE session_jobs
-            SET status = ?, completed_at = ?, heartbeat_at = ?, updated_at = ?
+            SET status = ?, completed_at = ?, updated_at = ?
             WHERE run_id = ? AND job_type = ?
             """,
-            (JOB_STATUS_DONE, now, now, now, run_id, job_type),
+            (JOB_STATUS_DONE, now, now, run_id, job_type),
         )
         conn.commit()
     return int(cursor.rowcount or 0) > 0
@@ -874,7 +748,7 @@ def fail_session_job(
         cursor = conn.execute(
             """
             UPDATE session_jobs
-            SET status = ?, available_at = ?, completed_at = ?, heartbeat_at = ?,
+            SET status = ?, available_at = ?, completed_at = ?,
                 updated_at = ?, error = ?
             WHERE run_id = ? AND job_type = ?
             """,
@@ -882,7 +756,6 @@ def fail_session_job(
                 status,
                 available_at.isoformat(),
                 now_iso if exhausted else None,
-                now_iso,
                 now_iso,
                 error,
                 run_id,
@@ -951,31 +824,59 @@ def count_session_jobs_by_status() -> dict[str, int]:
 # ── Queue management: retry / skip / inspect ─────────────────────────
 
 
+def _transition_dead_letter(
+	*,
+	new_status: str,
+	reset_attempts: bool,
+	where_clause: str,
+	params: list[Any],
+) -> int:
+	"""Transition dead_letter jobs to *new_status*. Returns rows affected.
+
+	When *reset_attempts* is True the job is fully reset (attempts, error,
+	claimed_at, completed_at, heartbeat_at cleared) for a fresh retry.
+	Otherwise only status, completed_at, and updated_at are touched (skip).
+	"""
+	_ensure_sessions_db_initialized()
+	now = _iso_now()
+	if reset_attempts:
+		sql = f"""
+			UPDATE session_jobs
+			SET status = ?, attempts = 0, available_at = ?, error = NULL,
+				claimed_at = NULL, completed_at = NULL, heartbeat_at = NULL,
+				updated_at = ?
+			{where_clause}
+		"""
+		all_params = [new_status, now, now, *params]
+	else:
+		sql = f"""
+			UPDATE session_jobs
+			SET status = ?, completed_at = ?, updated_at = ?
+			{where_clause}
+		"""
+		all_params = [new_status, now, now, *params]
+	with _connect() as conn:
+		cursor = conn.execute(sql, all_params)
+		conn.commit()
+	return int(cursor.rowcount or 0)
+
+
 def retry_session_job(
 	run_id: str, *, job_type: str = JOB_TYPE_EXTRACT,
 ) -> bool:
 	"""Reset a dead_letter job to pending for retry.
 
-	The ``AND status = 'dead_letter'`` guard is atomic — safe against
+	The ``AND status = 'dead_letter'`` guard is atomic -- safe against
 	concurrent daemon claiming.
 	"""
 	if not run_id:
 		return False
-	_ensure_sessions_db_initialized()
-	now = _iso_now()
-	with _connect() as conn:
-		cursor = conn.execute(
-			"""
-			UPDATE session_jobs
-			SET status = ?, attempts = 0, available_at = ?, error = NULL,
-				claimed_at = NULL, completed_at = NULL, heartbeat_at = NULL,
-				updated_at = ?
-			WHERE run_id = ? AND job_type = ? AND status = ?
-			""",
-			(JOB_STATUS_PENDING, now, now, run_id, job_type, JOB_STATUS_DEAD_LETTER),
-		)
-		conn.commit()
-	return int(cursor.rowcount or 0) > 0
+	return _transition_dead_letter(
+		new_status=JOB_STATUS_PENDING,
+		reset_attempts=True,
+		where_clause="WHERE run_id = ? AND job_type = ? AND status = ?",
+		params=[run_id, job_type, JOB_STATUS_DEAD_LETTER],
+	) > 0
 
 
 def skip_session_job(
@@ -984,19 +885,12 @@ def skip_session_job(
 	"""Mark a dead_letter job as done (skipped), unblocking the project."""
 	if not run_id:
 		return False
-	_ensure_sessions_db_initialized()
-	now = _iso_now()
-	with _connect() as conn:
-		cursor = conn.execute(
-			"""
-			UPDATE session_jobs
-			SET status = ?, completed_at = ?, updated_at = ?
-			WHERE run_id = ? AND job_type = ? AND status = ?
-			""",
-			(JOB_STATUS_DONE, now, now, run_id, job_type, JOB_STATUS_DEAD_LETTER),
-		)
-		conn.commit()
-	return int(cursor.rowcount or 0) > 0
+	return _transition_dead_letter(
+		new_status=JOB_STATUS_DONE,
+		reset_attempts=False,
+		where_clause="WHERE run_id = ? AND job_type = ? AND status = ?",
+		params=[run_id, job_type, JOB_STATUS_DEAD_LETTER],
+	) > 0
 
 
 def retry_project_jobs(
@@ -1005,21 +899,12 @@ def retry_project_jobs(
 	"""Retry all dead_letter jobs for a project. Returns count affected."""
 	if not repo_path:
 		return 0
-	_ensure_sessions_db_initialized()
-	now = _iso_now()
-	with _connect() as conn:
-		cursor = conn.execute(
-			"""
-			UPDATE session_jobs
-			SET status = ?, attempts = 0, available_at = ?, error = NULL,
-				claimed_at = NULL, completed_at = NULL, heartbeat_at = NULL,
-				updated_at = ?
-			WHERE repo_path = ? AND job_type = ? AND status = ?
-			""",
-			(JOB_STATUS_PENDING, now, now, repo_path, job_type, JOB_STATUS_DEAD_LETTER),
-		)
-		conn.commit()
-	return int(cursor.rowcount or 0)
+	return _transition_dead_letter(
+		new_status=JOB_STATUS_PENDING,
+		reset_attempts=True,
+		where_clause="WHERE repo_path = ? AND job_type = ? AND status = ?",
+		params=[repo_path, job_type, JOB_STATUS_DEAD_LETTER],
+	)
 
 
 def skip_project_jobs(
@@ -1028,19 +913,12 @@ def skip_project_jobs(
 	"""Skip all dead_letter jobs for a project. Returns count affected."""
 	if not repo_path:
 		return 0
-	_ensure_sessions_db_initialized()
-	now = _iso_now()
-	with _connect() as conn:
-		cursor = conn.execute(
-			"""
-			UPDATE session_jobs
-			SET status = ?, completed_at = ?, updated_at = ?
-			WHERE repo_path = ? AND job_type = ? AND status = ?
-			""",
-			(JOB_STATUS_DONE, now, now, repo_path, job_type, JOB_STATUS_DEAD_LETTER),
-		)
-		conn.commit()
-	return int(cursor.rowcount or 0)
+	return _transition_dead_letter(
+		new_status=JOB_STATUS_DONE,
+		reset_attempts=False,
+		where_clause="WHERE repo_path = ? AND job_type = ? AND status = ?",
+		params=[repo_path, job_type, JOB_STATUS_DEAD_LETTER],
+	)
 
 
 def resolve_run_id_prefix(prefix: str) -> str | None:
@@ -1191,7 +1069,6 @@ if __name__ == "__main__":
             claimed = claim_session_jobs(limit=1, run_ids=[run_id])
             assert queued
             assert claimed and str(claimed[0].get("run_id")) == run_id
-            assert heartbeat_session_job(run_id)
             assert complete_session_job(run_id)
             counts = count_session_jobs_by_status()
             assert counts.get(JOB_STATUS_DONE, 0) >= 1

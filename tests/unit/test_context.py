@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lerim.runtime.context import build_context
+from lerim.agents.context import build_context
 from tests.helpers import make_config
 
 
@@ -52,7 +52,7 @@ def test_context_is_frozen(tmp_path):
 def test_build_context_with_trace_and_artifacts(tmp_path):
 	"""trace_path and artifact_paths should be set when provided."""
 	trace = tmp_path / "trace.jsonl"
-	artifacts = {"extract": tmp_path / "extract.json"}
+	artifacts = {"summary": tmp_path / "summary.json"}
 	ctx = build_context(
 		repo_root=tmp_path,
 		trace_path=trace,

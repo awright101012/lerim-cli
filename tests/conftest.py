@@ -130,14 +130,7 @@ def pytest_collection_modifyitems(config, items):
 def tmp_lerim_root(tmp_path):
     """Temporary Lerim data root with canonical folder structure."""
     memory_dir = tmp_path / "memory"
-    for sub in (
-        "decisions",
-        "learnings",
-        "summaries",
-        "archived/decisions",
-        "archived/learnings",
-    ):
-        (memory_dir / sub).mkdir(parents=True)
+    memory_dir.mkdir(parents=True)
     (tmp_path / "workspace").mkdir()
     (tmp_path / "index").mkdir()
     return tmp_path
@@ -151,13 +144,10 @@ def tmp_config(tmp_path, tmp_lerim_root):
 
 @pytest.fixture
 def seeded_memory(tmp_lerim_root):
-    """tmp_lerim_root with fixture memory files copied in."""
-    decisions_dir = tmp_lerim_root / "memory" / "decisions"
-    learnings_dir = tmp_lerim_root / "memory" / "learnings"
-    for src in MEMORIES_DIR.glob("decision_*.md"):
-        (decisions_dir / src.name).write_text(src.read_text())
-    for src in MEMORIES_DIR.glob("learning_*.md"):
-        (learnings_dir / src.name).write_text(src.read_text())
+    """tmp_lerim_root with fixture memory files copied into flat memory dir."""
+    memory_dir = tmp_lerim_root / "memory"
+    for src in MEMORIES_DIR.glob("*.md"):
+        (memory_dir / src.name).write_text(src.read_text())
     return tmp_lerim_root
 
 

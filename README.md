@@ -52,9 +52,10 @@ Lerim works with any coding agent that produces session traces. Current adapters
 
 ## How It Works
 
-Lerim is file-first and primitive-first.
+Lerim is file-first.
 
-- Primitive folders: `decisions`, `learnings`, `summaries`
+- Memory types: `user`, `feedback`, `project`, `reference`
+- Flat layout: `memory/*.md` (plus `memory/summaries/`)
 - Project memory: `<repo>/.lerim/`
 - Global fallback: `~/.lerim/`
 - Search: file-based (no index required)
@@ -181,7 +182,7 @@ lerim up
 ```
 
 That's it. Lerim is now running as a Docker service — syncing sessions, extracting
-decisions and learnings, refining memories, and exposing the JSON API at `http://localhost:8765`.
+memories, refining them, and exposing the JSON API at `http://localhost:8765`.
 Use **[Lerim Cloud](https://lerim.dev)** for the web UI (session analytics, memories, settings).
 
 ### 5. Teach your agent about Lerim
@@ -202,7 +203,7 @@ At the start of a session, tell your agent:
 
 > Check lerim for any relevant memories about [topic you're working on].
 
-Your agent will run `lerim ask` or `lerim memory search` to pull in past decisions and learnings before it starts working.
+Your agent will run `lerim ask` to pull in past memories before it starts working.
 
 ### Running without Docker
 
@@ -229,7 +230,7 @@ The web dashboard has moved to **[lerim.dev](https://lerim.dev)**. The local bun
 
 ## CLI reference
 
-Full command reference: [`skills/lerim/cli-reference.md`](skills/lerim/cli-reference.md)
+Full command reference: [`src/lerim/skills/cli-reference.md`](src/lerim/skills/cli-reference.md)
 
 ```bash
 # Setup (host-only)
@@ -253,9 +254,7 @@ lerim status                                # runtime state
 lerim queue                                 # show pending session queue
 
 # Local commands (run on host, no server needed)
-lerim memory search "auth pattern"          # keyword search
 lerim memory list                           # list all memories
-lerim memory add --title "..." --body "..." # manual memory
 lerim connect auto                          # detect and connect platforms
 lerim skill install                         # install skill into agent directories
 ```
@@ -318,15 +317,13 @@ Project scope:
 <repo>/.lerim/
   config.toml              # project overrides
   memory/
-    decisions/
-    learnings/
+    *.md                  # flat layout (types: user, feedback, project, reference)
     summaries/
       YYYYMMDD/
         HHMMSS/
           {slug}.md
     archived/
-      decisions/
-      learnings/
+      *.md
   workspace/
     sync-<YYYYMMDD-HHMMSS>-<shortid>/
     maintain-<YYYYMMDD-HHMMSS>-<shortid>/

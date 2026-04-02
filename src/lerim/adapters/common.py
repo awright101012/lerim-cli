@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -90,6 +92,53 @@ def compute_file_hash(path: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def compact_jsonl(
+    raw_text: str, cleaner: Callable[[dict[str, Any]], dict[str, Any] | None]
+) -> str:
+    """Compact JSONL text by applying a format-specific cleaner to each parsed line.
+
+    The *cleaner* receives each parsed JSON dict and returns the cleaned dict,
+    or ``None`` to drop the line entirely.  Non-JSON lines are kept as-is.
+    """
+    kept: list[str] = []
+    for line in raw_text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        obj = cleaner(obj)
+        if obj is None:
+            continue
+        kept.append(json.dumps(obj, ensure_ascii=False))
+    return "\n".join(kept) + "\n"
+
+
+def readonly_connect(db_path: Path) -> sqlite3.Connection:
+    """Open a read-only SQLite connection with Row factory."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
+    return conn
+
+
+def write_session_cache(
+    cache_dir: Path,
+    run_id: str,
+    lines: list[str],
+    compact_fn: Callable[[str], str],
+) -> Path:
+    """Write compacted session JSONL to cache directory and return the path."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"{run_id}.jsonl"
+    raw = "\n".join(lines) + "\n"
+    cache_path.write_text(compact_fn(raw), encoding="utf-8")
+    return cache_path
 
 
 if __name__ == "__main__":

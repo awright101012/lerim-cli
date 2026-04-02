@@ -1,15 +1,14 @@
 # Lerim CLI Reference (Source Of Truth)
 
 Canonical parser source:
-- `src/lerim/app/cli.py`
+- `src/lerim/server/cli.py`
 
 Canonical command:
 - `lerim`
 
 Commands that call the HTTP API (`ask`, `sync`, `maintain`, `status`) require a
 running server (`lerim up` or `lerim serve`). Most other commands are **host-only**
-(local files / Docker CLI / queue DB). `memory search`, `memory list`, and
-`memory add` work without a server (they read or write the memory tree directly).
+(local files / Docker CLI / queue DB). `memory list` and `memory reset` work without a server.
 
 ## Global flags
 
@@ -36,7 +35,7 @@ running server (`lerim up` or `lerim serve`). Most other commands are **host-onl
 - `sync`
 - `maintain`
 - `dashboard`
-- `memory` (`search`, `list`, `add`, `reset`)
+- `memory` (`list`, `reset`)
 - `ask`
 - `status`
 - `queue`
@@ -120,7 +119,7 @@ lerim connect remove claude               # disconnect Claude
 ### `lerim sync`
 
 Hot-path: discover new agent sessions from connected platforms, enqueue them,
-and run DSPy extraction to create memory primitives.
+and run DSPy extraction to create memories.
 Requires a running server (`lerim up` or `lerim serve`).
 
 **Time window** controls which sessions to scan:
@@ -157,14 +156,14 @@ lerim sync --ignore-lock            # skip writer lock (debugging only)
 | `--ignore-lock` | off | Skip writer lock (risk of corruption) |
 
 Notes:
-- `sync` is the hot path (queue + DSPy extraction + lead decision/write).
+- `sync` is the hot path (queue + DSPy extraction + lead write).
 - Cold maintenance work is not executed in `sync`.
 
 ### `lerim maintain`
 
 Cold-path: offline memory refinement. Scans existing memories and merges
 duplicates, archives low-value items, and consolidates related memories.
-Archived items go to `memory/archived/{decisions,learnings}/`.
+Archived items go to `memory/archived/`.
 Requires a running server (`lerim up` or `lerim serve`).
 
 ```bash
@@ -203,24 +202,9 @@ lerim dashboard --port 9000      # port shown in the API URL
 Subcommands for managing the memory store directly.
 Memories are stored as markdown files in `.lerim/memory/`.
 
-#### `lerim memory search`
-
-Full-text keyword search across memory titles, bodies, and tags (case-insensitive).
-
-```bash
-lerim memory search 'database migration'
-lerim memory search pytest --limit 5
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `query` | required | Search string to match |
-| `--project` | -- | Filter to project (not yet implemented) |
-| `--limit` | `20` | Max results |
-
 #### `lerim memory list`
 
-List stored memories (decisions and learnings), ordered by recency.
+List stored memories, ordered by recency.
 
 ```bash
 lerim memory list
@@ -232,25 +216,6 @@ lerim memory list --json       # structured JSON output
 |------|---------|-------------|
 | `--project` | -- | Filter to project (not yet implemented) |
 | `--limit` | `50` | Max items |
-
-#### `lerim memory add`
-
-Manually create a single memory record.
-
-```bash
-lerim memory add --title "Use uv for deps" --body "uv is faster than pip"
-lerim memory add --title "API auth" --body "Use bearer tokens" --primitive decision
-lerim memory add --title "Slow test" --body "Integration suite 5min" --kind friction --confidence 0.9 --tags ci,testing
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--title` | required | Short descriptive title |
-| `--body` | required | Full body content |
-| `--primitive` | `learning` | `decision` or `learning` |
-| `--kind` | `insight` | `insight`, `procedure`, `friction`, `pitfall`, `preference` |
-| `--confidence` | `0.7` | Score from 0.0 to 1.0 |
-| `--tags` | -- | Comma-separated tags (e.g. `python,testing,ci`) |
 
 #### `lerim memory reset`
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def test_sync_result_contract_fields():
     """SyncResultContract has exactly these fields."""
-    from lerim.runtime.helpers import SyncResultContract
+    from lerim.agents.contracts import SyncResultContract
 
     expected = {
         "trace_path",
@@ -23,7 +23,7 @@ def test_sync_result_contract_fields():
 
 def test_maintain_result_contract_fields():
     """MaintainResultContract has exactly these fields."""
-    from lerim.runtime.helpers import MaintainResultContract
+    from lerim.agents.contracts import MaintainResultContract
 
     expected = {
         "memory_root",
@@ -38,35 +38,34 @@ def test_maintain_result_contract_fields():
 
 def test_sync_counts_fields():
     """SyncCounts has add, update, no_op."""
-    from lerim.runtime.contracts import SyncCounts
+    from lerim.agents.contracts import SyncCounts
 
     assert set(SyncCounts.model_fields.keys()) == {"add", "update", "no_op"}
 
 
 def test_maintain_counts_fields():
-    """MaintainCounts has merged, archived, consolidated, decayed, unchanged."""
-    from lerim.runtime.contracts import MaintainCounts
+    """MaintainCounts has merged, archived, consolidated, unchanged."""
+    from lerim.agents.contracts import MaintainCounts
 
     assert set(MaintainCounts.model_fields.keys()) == {
         "merged",
         "archived",
         "consolidated",
-        "decayed",
         "unchanged",
     }
 
 
 def test_memory_candidate_schema_stable():
-    """MemoryCandidate has primitive, kind, title, body, confidence, tags."""
-    from lerim.memory.schemas import MemoryCandidate
+    """MemoryCandidate has type, name, description, body."""
+    from lerim.agents.schemas import MemoryCandidate
 
-    expected = {"primitive", "kind", "title", "body", "confidence", "tags", "source_speaker", "durability", "outcome"}
+    expected = {"type", "name", "description", "body"}
     assert set(MemoryCandidate.model_fields.keys()) == expected
 
 
 def test_cli_subcommands_present():
     """CLI parser has all expected subcommands."""
-    from lerim.app.cli import build_parser
+    from lerim.server.cli import build_parser
 
     parser = build_parser()
     # Extract subcommand names from the parser
@@ -93,13 +92,18 @@ def test_cli_subcommands_present():
         assert cmd in choices, f"Missing CLI subcommand: {cmd}"
 
 
-def test_memory_frontmatter_schema_keys():
-    """MEMORY_FRONTMATTER_SCHEMA dict has expected keys for each type."""
-    from lerim.memory.memory_record import MEMORY_FRONTMATTER_SCHEMA, MemoryType
+def test_memory_record_frontmatter_keys():
+    """MemoryRecord.to_frontmatter_dict() produces expected keys."""
+    from lerim.agents.schemas import MemoryRecord
 
-    assert MemoryType.decision in MEMORY_FRONTMATTER_SCHEMA
-    assert MemoryType.learning in MEMORY_FRONTMATTER_SCHEMA
-    assert "id" in MEMORY_FRONTMATTER_SCHEMA[MemoryType.decision]
-    assert "kind" in MEMORY_FRONTMATTER_SCHEMA[MemoryType.learning]
-    assert "source_speaker" in MEMORY_FRONTMATTER_SCHEMA[MemoryType.decision]
-    assert "durability" in MEMORY_FRONTMATTER_SCHEMA[MemoryType.learning]
+    record = MemoryRecord(
+        id="contract-test",
+        type="user",
+        name="Contract Test",
+        description="Testing frontmatter contract.",
+        body="Body",
+        source="test",
+    )
+    fm = record.to_frontmatter_dict()
+    expected = {"name", "description", "type", "id", "created", "updated", "source"}
+    assert set(fm.keys()) == expected

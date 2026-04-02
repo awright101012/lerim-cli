@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import lerim.app.api as api_mod
-from lerim.app.api import api_queue_jobs, api_retry_job, api_skip_job
+import lerim.server.api as api_mod
+from lerim.server.api import api_queue_jobs, api_retry_job, api_skip_job
 
 
 QUEUE_COUNTS = {"pending": 2, "running": 0, "done": 5, "failed": 1, "dead_letter": 0}

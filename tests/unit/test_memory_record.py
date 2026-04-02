@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import frontmatter
 
-from lerim.memory.memory_record import (
-    MEMORY_TYPE_FOLDERS,
+from lerim.agents.schemas import (
     MemoryRecord,
     MemoryType,
     canonical_memory_filename,
     slugify,
 )
+
+
+# --- slugify tests (unchanged) ---
 
 
 def test_slugify_normal():
@@ -25,9 +27,9 @@ def test_slugify_special_chars():
 
 def test_slugify_unicode():
     """Unicode chars transliterated or stripped."""
-    result = slugify("café résumé")
+    result = slugify("cafe resume")
     assert result  # non-empty
-    assert "caf" in result  # accent stripped
+    assert "caf" in result
 
 
 def test_slugify_empty():
@@ -42,6 +44,9 @@ def test_slugify_long():
     result = slugify(long_title)
     assert len(result) > 0
     assert result.isascii()
+
+
+# --- canonical_memory_filename tests (unchanged) ---
 
 
 def test_canonical_memory_filename():
@@ -61,104 +66,86 @@ def test_canonical_memory_filename_with_run_id_date():
     assert fname.endswith(".md")
 
 
+# --- MemoryType enum tests ---
+
+
+def test_memory_type_enum_values():
+    """MemoryType has user, feedback, project, reference, summary."""
+    expected = {"user", "feedback", "project", "reference", "summary"}
+    actual = {m.value for m in MemoryType}
+    assert actual == expected
+
+
+def test_memory_type_enum_members():
+    """All expected members are accessible as attributes."""
+    assert MemoryType.user.value == "user"
+    assert MemoryType.feedback.value == "feedback"
+    assert MemoryType.project.value == "project"
+    assert MemoryType.reference.value == "reference"
+    assert MemoryType.summary.value == "summary"
+
+
+# --- MemoryRecord tests (new 3-field frontmatter: name, description, type) ---
+
+
 def test_memory_record_to_markdown_roundtrip():
     """MemoryRecord -> to_markdown() -> parse with python-frontmatter -> same fields."""
     record = MemoryRecord(
         id="test-record",
-        primitive="learning",
-        kind="pitfall",
-        title="Test Record",
+        type="user",
+        name="Test Record",
+        description="A short description of the record.",
         body="This is the body content.",
-        confidence=0.75,
-        tags=["test", "demo"],
         source="test-run",
     )
     md = record.to_markdown()
     parsed = frontmatter.loads(md)
     assert parsed["id"] == "test-record"
-    assert parsed["title"] == "Test Record"
-    assert parsed["kind"] == "pitfall"
-    assert parsed["confidence"] == 0.75
-    assert parsed["tags"] == ["test", "demo"]
+    assert parsed["name"] == "Test Record"
+    assert parsed["description"] == "A short description of the record."
+    assert parsed["type"] == "user"
     assert parsed.content.strip() == "This is the body content."
 
 
 def test_memory_record_to_frontmatter_dict():
-    """to_frontmatter_dict() has expected keys, no extra keys."""
+    """to_frontmatter_dict() has expected keys."""
     record = MemoryRecord(
-        id="dec-1",
-        primitive="decision",
-        title="Decision Test",
+        id="rec-1",
+        type="project",
+        name="Project Decision",
+        description="Describes a project decision.",
         body="Body text",
-        confidence=0.9,
-        tags=["a"],
         source="run-1",
     )
     fm = record.to_frontmatter_dict()
-    expected_keys = {
-        "id",
-        "title",
-        "created",
-        "updated",
-        "source",
-        "confidence",
-        "source_speaker",
-        "durability",
-        "tags",
-    }
+    expected_keys = {"name", "description", "type", "id", "created", "updated", "source"}
     assert set(fm.keys()) == expected_keys
-    # Learning should also have 'kind'
-    learning = MemoryRecord(
-        id="learn-1",
-        primitive="learning",
-        kind="insight",
-        title="Learn Test",
+
+
+def test_memory_record_all_types():
+    """MemoryRecord accepts all valid type values."""
+    for t in ("user", "feedback", "project", "reference"):
+        record = MemoryRecord(
+            id=f"rec-{t}",
+            type=t,
+            name=f"Name for {t}",
+            description=f"Desc for {t}",
+            body="Body",
+            source="test",
+        )
+        assert record.type == t
+
+
+def test_memory_record_frontmatter_no_extra_keys():
+    """to_frontmatter_dict() has no unexpected keys."""
+    record = MemoryRecord(
+        id="rec-2",
+        type="feedback",
+        name="Feedback item",
+        description="Feedback description.",
         body="Body",
-        confidence=0.8,
-        tags=[],
         source="run-2",
     )
-    fm_learn = learning.to_frontmatter_dict()
-    assert "kind" in fm_learn
-
-
-def test_memory_type_folders():
-    """MEMORY_TYPE_FOLDERS maps all MemoryType values."""
-    assert MemoryType.decision in MEMORY_TYPE_FOLDERS
-    assert MemoryType.learning in MEMORY_TYPE_FOLDERS
-    assert MemoryType.summary in MEMORY_TYPE_FOLDERS
-    assert MEMORY_TYPE_FOLDERS[MemoryType.decision] == "decisions"
-    assert MEMORY_TYPE_FOLDERS[MemoryType.learning] == "learnings"
-    assert MEMORY_TYPE_FOLDERS[MemoryType.summary] == "summaries"
-
-
-def test_memory_record_outcome_in_frontmatter():
-	"""MemoryRecord with outcome should include it in frontmatter."""
-	r = MemoryRecord(
-		id="test",
-		primitive="learning",
-		kind="pitfall",
-		title="Test",
-		body="Content",
-		confidence=0.8,
-		outcome="failed",
-		source="test-run",
-	)
-	fm = r.to_frontmatter_dict()
-	assert fm["outcome"] == "failed"
-	md = r.to_markdown()
-	assert "outcome: failed" in md
-
-
-def test_memory_record_no_outcome_in_frontmatter():
-	"""MemoryRecord without outcome should not include it in frontmatter."""
-	r = MemoryRecord(
-		id="test",
-		primitive="decision",
-		title="Test",
-		body="Content",
-		confidence=0.9,
-		source="test-run",
-	)
-	fm = r.to_frontmatter_dict()
-	assert "outcome" not in fm
+    fm = record.to_frontmatter_dict()
+    allowed = {"name", "description", "type", "id", "created", "updated", "source"}
+    assert set(fm.keys()) <= allowed

@@ -9,13 +9,6 @@ dir = "~/.lerim"
 scope = "project_fallback_global"   # project_fallback_global | project_only | global_only
 project_dir_name = ".lerim"
 
-[memory.decay]
-enabled = true
-decay_days = 180                    # days of no access before full decay
-min_confidence_floor = 0.1          # decay never drops below this multiplier
-archive_threshold = 0.2             # effective confidence below this → archive candidate
-recent_access_grace_days = 30       # recently accessed memories skip archiving
-
 [server]
 host = "127.0.0.1"
 port = 8765

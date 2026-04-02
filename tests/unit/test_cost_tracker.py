@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lerim.runtime.cost_tracker import (
+from lerim.server.runtime import (
 	_run_cost,
 	add_cost,
 	capture_dspy_cost,

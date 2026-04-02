@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from lerim.config.settings import AgentRoleConfig
-from lerim.runtime.providers import (
+from lerim.config.settings import RoleConfig
+from lerim.config.providers import (
     build_dspy_lm,
     list_provider_models,
     parse_fallback_spec,
@@ -41,16 +41,14 @@ def test_build_dspy_lm_ollama(tmp_path):
     cfg = make_config(tmp_path)
     # Override extract role to use ollama
     from dataclasses import replace
-    from lerim.config.settings import DSPyRoleConfig
+    from lerim.config.settings import RoleConfig as _RC
 
-    ollama_role = DSPyRoleConfig(
+    ollama_role = _RC(
         provider="ollama",
         model="qwen3:4b",
-        api_base="",
         timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
-        openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=ollama_role)
     lm = build_dspy_lm("extract", config=cfg)
@@ -61,14 +59,13 @@ def test_build_dspy_lm_openrouter(tmp_path):
     """build_dspy_lm with openrouter provider constructs correct LM."""
     import dspy
     from dataclasses import replace
-    from lerim.config.settings import DSPyRoleConfig
+    from lerim.config.settings import RoleConfig
 
     cfg = make_config(tmp_path)
     cfg = replace(cfg, openrouter_api_key="test-key")
-    or_role = DSPyRoleConfig(
+    or_role = RoleConfig(
         provider="openrouter",
         model="test/model",
-        api_base="",
         timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
@@ -83,17 +80,15 @@ def test_build_dspy_lm_zai(tmp_path):
     """build_dspy_lm with zai provider constructs correct LM."""
     import dspy
     from dataclasses import replace
-    from lerim.config.settings import DSPyRoleConfig
+    from lerim.config.settings import RoleConfig
 
     cfg = make_config(tmp_path)
-    zai_role = DSPyRoleConfig(
+    zai_role = RoleConfig(
         provider="zai",
         model="glm-4.5-air",
-        api_base="",
         timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
-        openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=zai_role, zai_api_key="test-key")
     lm = build_dspy_lm("extract", config=cfg)
@@ -104,17 +99,15 @@ def test_build_dspy_lm_mlx(tmp_path):
     """build_dspy_lm with mlx provider constructs 'openai/model' LM."""
     import dspy
     from dataclasses import replace
-    from lerim.config.settings import DSPyRoleConfig
+    from lerim.config.settings import RoleConfig
 
     cfg = make_config(tmp_path)
-    mlx_role = DSPyRoleConfig(
+    mlx_role = RoleConfig(
         provider="mlx",
         model="mlx-community/Qwen3.5-9B-4bit",
-        api_base="",
         timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
-        openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=mlx_role)
     lm = build_dspy_lm("extract", config=cfg)
@@ -123,7 +116,7 @@ def test_build_dspy_lm_mlx(tmp_path):
 
 def test_api_key_mlx_returns_none(tmp_path):
     """MLX provider does not require an API key."""
-    from lerim.runtime.providers import _api_key_for_provider
+    from lerim.config.providers import _api_key_for_provider
 
     cfg = make_config(tmp_path)
     assert _api_key_for_provider(cfg, "mlx") is None
@@ -132,7 +125,7 @@ def test_api_key_mlx_returns_none(tmp_path):
 def test_api_key_resolution(tmp_path):
     """_api_key_for_provider resolves from config fields."""
     from dataclasses import replace
-    from lerim.runtime.providers import _api_key_for_provider
+    from lerim.config.providers import _api_key_for_provider
 
     cfg = make_config(tmp_path)
     cfg = replace(cfg, zai_api_key="zai-key-123")
@@ -143,18 +136,16 @@ def test_api_key_resolution(tmp_path):
 def test_missing_api_key_raises(tmp_path):
     """Missing API key for non-ollama provider raises error."""
     from dataclasses import replace
-    from lerim.config.settings import DSPyRoleConfig
+    from lerim.config.settings import RoleConfig
 
     cfg = make_config(tmp_path)
     cfg = replace(cfg, openrouter_api_key=None)
-    or_role = DSPyRoleConfig(
+    or_role = RoleConfig(
         provider="openrouter",
         model="test/model",
-        api_base="",
         timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
-        openrouter_provider_order=(),
     )
     cfg = replace(cfg, extract_role=or_role)
     with pytest.raises(RuntimeError, match="missing_api_key"):
@@ -165,7 +156,7 @@ def test_build_dspy_lm_lead(tmp_path):
     """build_dspy_lm with 'lead' role should construct a DSPy LM."""
     import dspy
     from dataclasses import replace
-    from lerim.runtime.providers import build_dspy_lm
+    from lerim.config.providers import build_dspy_lm
 
     cfg = make_config(tmp_path)
     cfg = replace(cfg, openrouter_api_key="test-key")
@@ -175,7 +166,7 @@ def test_build_dspy_lm_lead(tmp_path):
 
 def test_build_dspy_fallback_lms_lead_empty(tmp_path):
     """build_dspy_fallback_lms with 'lead' role and no fallbacks returns empty list."""
-    from lerim.runtime.providers import build_dspy_fallback_lms
+    from lerim.config.providers import build_dspy_fallback_lms
 
     cfg = make_config(tmp_path)
     lms = build_dspy_fallback_lms("lead", config=cfg)
@@ -187,17 +178,14 @@ def test_build_dspy_fallback_lms_lead_with_fallbacks(tmp_path):
     """build_dspy_fallback_lms with 'lead' role and fallbacks returns LM list."""
     import dspy
     from dataclasses import replace
-    from lerim.runtime.providers import build_dspy_fallback_lms
+    from lerim.config.providers import build_dspy_fallback_lms
 
     cfg = make_config(tmp_path)
-    role = AgentRoleConfig(
+    role = RoleConfig(
         provider="openrouter",
         model="x-ai/grok-4.1-fast",
-        api_base="",
         fallback_models=("openrouter:qwen/qwen3-coder",),
         timeout_seconds=120,
-        max_iterations=10,
-        openrouter_provider_order=(),
     )
     cfg = replace(cfg, lead_role=role, openrouter_api_key="test-key")
     lms = build_dspy_fallback_lms("lead", config=cfg)
