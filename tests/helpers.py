@@ -38,13 +38,6 @@ def make_config(base: Path) -> Config:
             max_window_tokens=300000,
             window_overlap_tokens=5000,
         ),
-        summarize_role=RoleConfig(
-            provider="openrouter",
-            model="openai/gpt-5-nano",
-            timeout_seconds=180,
-            max_window_tokens=300000,
-            window_overlap_tokens=5000,
-        ),
         sync_window_days=7,
         sync_max_sessions=50,
         parallel_pipelines=True,
@@ -98,7 +91,6 @@ def write_test_config(tmp_path: Path, **sections: dict[str, Any]) -> Path:
     legacy_dspy = sections.pop("dspy", None)
     if isinstance(legacy_dspy, dict):
         extract = all_sections.setdefault("roles.extract", {})
-        summarize = all_sections.setdefault("roles.summarize", {})
         for key, value in legacy_dspy.items():
             mapped = {
                 "provider": "provider",
@@ -109,7 +101,6 @@ def write_test_config(tmp_path: Path, **sections: dict[str, Any]) -> Path:
             }.get(key)
             if mapped:
                 extract[mapped] = value
-                summarize[mapped] = value
 
     for name, payload in sections.items():
         if isinstance(payload, dict):

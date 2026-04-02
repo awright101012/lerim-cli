@@ -56,13 +56,6 @@ def _make_ollama_config(
             max_window_tokens=300000,
             window_overlap_tokens=5000,
         ),
-        summarize_role=RoleConfig(
-            provider=extract_provider,
-            model=extract_model,
-            timeout_seconds=180,
-            max_window_tokens=300000,
-            window_overlap_tokens=5000,
-        ),
         sync_window_days=7,
         sync_max_sessions=50,
         parallel_pipelines=True,

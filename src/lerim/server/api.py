@@ -116,7 +116,7 @@ def _ollama_models(config: Config) -> list[tuple[str, str]]:
 				seen.add(key)
 				pairs.append(key)
 
-	for role in (config.extract_role, config.summarize_role):
+	for role in (config.extract_role,):
 		if role.provider == "ollama":
 			base = role.api_base or default_base
 			key = (base, role.model)

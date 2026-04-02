@@ -29,11 +29,3 @@ fallback_models = ["zai:glm-4.5-air"]
 timeout_seconds = 180
 max_window_tokens = 300000
 window_overlap_tokens = 5000
-
-[roles.summarize]
-provider = "minimax"
-model = "MiniMax-M2.5"
-fallback_models = ["zai:glm-4.5-air"]
-timeout_seconds = 180
-max_window_tokens = 300000
-window_overlap_tokens = 5000

@@ -908,7 +908,6 @@ def _serialize_full_config(config: Config) -> dict[str, Any]:
         "roles": {
             "lead": _role_dict(config.lead_role),
             "extract": _role_dict(config.extract_role),
-            "summarize": _role_dict(config.summarize_role),
         },
         "tracing": {
             "enabled": config.tracing_enabled,

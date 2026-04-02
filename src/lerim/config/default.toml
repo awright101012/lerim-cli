@@ -16,7 +16,7 @@ sync_interval_minutes = 30          # sync hot path interval
 maintain_interval_minutes = 60       # maintain cold path interval
 sync_window_days = 7
 sync_max_sessions = 50
-parallel_pipelines = true               # run extract + summarize in the same tool turn (set false for local/Ollama models)
+parallel_pipelines = true               # run extract pipelines in parallel (set false for local/Ollama models)
 
 [roles.lead]
 provider = "opencode_go"               # opencode_go | minimax | zai | openrouter | openai | ollama
@@ -45,18 +45,6 @@ openrouter_provider_order = []
 thinking = true
 max_tokens = 32000
 max_workers = 4
-
-[roles.summarize]
-provider = "opencode_go"
-model = "minimax-m2.5"                 # DSPy summarization model
-api_base = ""
-fallback_models = []
-timeout_seconds = 300
-max_window_tokens = 100000
-window_overlap_tokens = 5000
-openrouter_provider_order = []
-thinking = true
-max_tokens = 32000
 
 [providers]
 # Default API base URLs per provider.

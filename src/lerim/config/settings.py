@@ -31,10 +31,10 @@ _LAST_CONFIG_SOURCES: list[dict[str, str]] = []
 
 @dataclass(frozen=True)
 class RoleConfig:
-	"""Configuration for any LLM role (lead, extract, summarize).
+	"""Configuration for any LLM role (lead, extract).
 
 	All fields have defaults so the same class works for lead (uses max_iters_*),
-	extract/summarize (uses max_window_tokens, max_workers), or any future role.
+	extract (uses max_window_tokens, max_workers), or any future role.
 	"""
 
 	provider: str
@@ -243,7 +243,6 @@ class Config:
 
     lead_role: RoleConfig
     extract_role: RoleConfig
-    summarize_role: RoleConfig
 
     tracing_enabled: bool
     tracing_include_httpx: bool
@@ -302,17 +301,6 @@ class Config:
                     self.extract_role.openrouter_provider_order
                 ),
             },
-            "summarize_role": {
-                "provider": self.summarize_role.provider,
-                "model": self.summarize_role.model,
-                "api_base": self.summarize_role.api_base,
-                "timeout_seconds": self.summarize_role.timeout_seconds,
-                "max_window_tokens": self.summarize_role.max_window_tokens,
-                "window_overlap_tokens": self.summarize_role.window_overlap_tokens,
-                "openrouter_provider_order": list(
-                    self.summarize_role.openrouter_provider_order
-                ),
-            },
             "parallel_pipelines": self.parallel_pipelines,
             "tracing_enabled": self.tracing_enabled,
             "tracing_include_httpx": self.tracing_include_httpx,
@@ -365,8 +353,8 @@ def _build_role(
 	)
 
 
-def _build_all_roles(roles: dict[str, Any]) -> tuple[RoleConfig, RoleConfig, RoleConfig]:
-	"""Build lead, extract, summarize role configs from TOML roles section."""
+def _build_all_roles(roles: dict[str, Any]) -> tuple[RoleConfig, RoleConfig]:
+	"""Build lead and extract role configs from TOML roles section."""
 	lead = _build_role(
 		_ensure_dict(roles, "lead"),
 		default_provider="openrouter",
@@ -377,12 +365,7 @@ def _build_all_roles(roles: dict[str, Any]) -> tuple[RoleConfig, RoleConfig, Rol
 		default_provider="ollama",
 		default_model="qwen3:8b",
 	)
-	summarize = _build_role(
-		_ensure_dict(roles, "summarize"),
-		default_provider=extract.provider,
-		default_model=extract.model,
-	)
-	return lead, extract, summarize
+	return lead, extract
 
 
 def _parse_string_table(raw: dict[str, Any]) -> dict[str, str]:
@@ -464,7 +447,7 @@ def load_config() -> Config:
         ensure_memory_paths(build_memory_paths(data_root))
         _ensure_project_config_exists(data_root)
 
-    lead_role, extract_role, summarize_role = _build_all_roles(roles)
+    lead_role, extract_role = _build_all_roles(roles)
 
     port = _require_int(server, "port", minimum=1)
     if port > 65535:
@@ -511,7 +494,6 @@ def load_config() -> Config:
         parallel_pipelines=bool(server.get("parallel_pipelines", True)),
         lead_role=lead_role,
         extract_role=extract_role,
-        summarize_role=summarize_role,
         tracing_enabled=bool(tracing.get("enabled", False))
         or os.getenv("LERIM_TRACING", "").strip().lower() in ("1", "true", "yes", "on"),
         tracing_include_httpx=bool(tracing.get("include_httpx", False)),
@@ -645,7 +627,7 @@ def build_isolated_config(
         existing = _ensure_dict(roles, role_name)
         roles[role_name] = _deep_merge(existing, overrides)
 
-    lead_role, extract_role, summarize_role = _build_all_roles(roles)
+    lead_role, extract_role = _build_all_roles(roles)
 
     port = _require_int(server, "port", minimum=1)
     if port > 65535:
@@ -679,7 +661,6 @@ def build_isolated_config(
         parallel_pipelines=bool(server.get("parallel_pipelines", True)),
         lead_role=lead_role,
         extract_role=extract_role,
-        summarize_role=summarize_role,
         tracing_enabled=bool(tracing.get("enabled", False))
         or os.getenv("LERIM_TRACING", "").strip().lower() in ("1", "true", "yes", "on"),
         tracing_include_httpx=bool(tracing.get("include_httpx", False)),
@@ -714,9 +695,6 @@ if __name__ == "__main__":
     assert cfg.extract_role.provider
     assert cfg.extract_role.max_window_tokens >= 1000
     assert cfg.extract_role.window_overlap_tokens >= 0
-    assert cfg.summarize_role.provider
-    assert cfg.summarize_role.max_window_tokens >= 1000
-    assert cfg.summarize_role.window_overlap_tokens >= 0
     assert isinstance(cfg.tracing_enabled, bool)
     assert isinstance(cfg.tracing_include_httpx, bool)
     assert isinstance(cfg.tracing_include_content, bool)
@@ -725,7 +703,6 @@ if __name__ == "__main__":
     payload = cfg.public_dict()
     assert "lead_role" in payload
     assert "extract_role" in payload
-    assert "summarize_role" in payload
     assert "agents" in payload
     assert "projects" in payload
     print(

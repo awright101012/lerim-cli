@@ -29,8 +29,8 @@ class TestValidateProviderForRole:
 
 	def test_unsupported_role_raises_with_supported_roles(self):
 		"""Provider that exists but doesn't support the role should list its supported roles."""
-		with pytest.raises(RuntimeError, match="does not support role 'summarize'"):
-			validate_provider_for_role("mlx", "summarize")
+		with pytest.raises(RuntimeError, match="does not support role 'extract'"):
+			validate_provider_for_role("mlx", "extract")
 
 
 class TestNormalizeModelName:
