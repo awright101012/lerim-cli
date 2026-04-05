@@ -5,12 +5,12 @@ question -> dspy.ReAct(AskSignature, tools) -> answer with citations.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import dspy
 
-from lerim.agents.context import RuntimeContext
-from lerim.agents.tools import make_ask_tools
+from lerim.agents.tools import MemoryTools
 
 
 # ---------------------------------------------------------------------------
@@ -18,37 +18,37 @@ from lerim.agents.tools import make_ask_tools
 # ---------------------------------------------------------------------------
 
 def format_ask_hints(
-    hits: list[dict[str, Any]],
-    context_docs: list[dict[str, Any]],
+	hits: list[dict[str, Any]],
+	context_docs: list[dict[str, Any]],
 ) -> str:
-    """Format pre-fetched hits and context docs into a hints string.
+	"""Format pre-fetched hits and context docs into a hints string.
 
-    Returns a combined text block suitable for the AskSignature.hints field.
-    """
-    context_lines = [
-        (
-            f"- [{fm.get('type', '?')}] {fm.get('name', '?')}: "
-            f"{fm.get('description', '')} :: {str(fm.get('body', '')).strip()[:260]}"
-        )
-        for fm in hits
-    ]
-    context_block = "\n".join(context_lines) or "(no relevant memories)"
+	Returns a combined text block suitable for the AskSignature.hints field.
+	"""
+	context_lines = [
+		(
+			f"- [{fm.get('type', '?')}] {fm.get('name', '?')}: "
+			f"{fm.get('description', '')} :: {str(fm.get('body', '')).strip()[:260]}"
+		)
+		for fm in hits
+	]
+	context_block = "\n".join(context_lines) or "(no relevant memories)"
 
-    context_doc_lines = []
-    for row in context_docs:
-        doc_id = str(row.get("doc_id") or "")
-        title = str(row.get("title") or "")
-        body = str(row.get("body") or "").strip()
-        snippet = " ".join(body.split())[:260]
-        context_doc_lines.append(f"- {doc_id}: {title} :: {snippet}")
-    context_doc_block = (
-        "\n".join(context_doc_lines)
-        if context_doc_lines
-        else "(no context docs loaded)"
-    )
+	context_doc_lines = []
+	for row in context_docs:
+		doc_id = str(row.get("doc_id") or "")
+		title = str(row.get("title") or "")
+		body = str(row.get("body") or "").strip()
+		snippet = " ".join(body.split())[:260]
+		context_doc_lines.append(f"- {doc_id}: {title} :: {snippet}")
+	context_doc_block = (
+		"\n".join(context_doc_lines)
+		if context_doc_lines
+		else "(no context docs loaded)"
+	)
 
-    return f"""\
-Pre-fetched hints (may be incomplete -- use scan_memory_manifest for more):
+	return f"""\
+Pre-fetched hints (may be incomplete -- use scan() for full manifest):
 {context_block}
 
 Context docs:
@@ -56,59 +56,56 @@ Context docs:
 
 
 class AskSignature(dspy.Signature):
-    """Answer the user question using your memory tools.
+	"""Answer the user question using your memory tools.
 
-    Steps:
-    1. Call scan_memory_manifest() to see all available memories
-    2. Based on the question, decide which memory files to read
-    3. Call read_file() on relevant memories
-    4. Answer with evidence and file path citations
-    5. If no relevant memories exist, say so clearly
+	Steps:
+	1. Call scan() to see all available memories (returns filename,
+	   description, modified time). Filenames encode the type and topic
+	   (e.g. feedback_use_tabs.md, project_dspy_migration.md).
+	2. Based on the question and descriptions, decide which files to read
+	3. Call read() on relevant memories (use filenames from scan)
+	4. Answer with evidence and cite the filenames you used
+	5. If no relevant memories exist, say so clearly
 
-    Memory layout (under memory_root):
-    - *.md -- memory files (types: user, feedback, project, reference)
-    - summaries/YYYYMMDD/HHMMSS/*.md -- session summaries
-    Each file: YAML frontmatter (name, description, type) + markdown body.
+	Memory layout:
+	- {type}_{topic}.md -- memory files (feedback_, project_, user_, reference_)
+	- summaries/*.md -- session summaries (date-prefixed)
+	- index.md -- semantic index organized by section
+	Each memory file: YAML frontmatter (name, description, type) + markdown body.
+	"""
 
-    Available tools:
-    - scan_memory_manifest() -- compact list of all memories
-    - list_files() -- browse directories
-    - read_file(path) -- get full content of a specific file
-    """
-
-    question: str = dspy.InputField(
-        desc="The user's question to answer"
-    )
-    memory_root: str = dspy.InputField(
-        desc="Path to the memory root directory"
-    )
-    hints: str = dspy.InputField(
-        desc="Pre-fetched context (may be empty)"
-    )
-    answer: str = dspy.OutputField(
-        desc="Answer citing memory file paths"
-    )
+	question: str = dspy.InputField(
+		desc="The user's question to answer"
+	)
+	hints: str = dspy.InputField(
+		desc="Pre-fetched context (may be empty)"
+	)
+	answer: str = dspy.OutputField(
+		desc="Answer citing memory filenames"
+	)
 
 
 class AskAgent(dspy.Module):
-    """DSPy ReAct module for the ask flow. Independently optimizable."""
+	"""DSPy ReAct module for the ask flow. Independently optimizable."""
 
-    def __init__(self, ctx: RuntimeContext):
-        super().__init__()
-        self.react = dspy.ReAct(
-            AskSignature,
-            tools=make_ask_tools(ctx),
-            max_iters=ctx.config.lead_role.max_iters_ask,
-        )
+	def __init__(self, memory_root: Path, max_iters: int = 30):
+		super().__init__()
+		self.tools = MemoryTools(memory_root=memory_root)
+		self.react = dspy.ReAct(
+			AskSignature,
+			tools=[
+				self.tools.read,
+				self.tools.scan,
+			],
+			max_iters=max_iters,
+		)
 
-    def forward(
-        self,
-        question: str,
-        memory_root: str,
-        hints: str,
-    ) -> dspy.Prediction:
-        return self.react(
-            question=question,
-            memory_root=memory_root,
-            hints=hints,
-        )
+	def forward(
+		self,
+		question: str,
+		hints: str,
+	) -> dspy.Prediction:
+		return self.react(
+			question=question,
+			hints=hints,
+		)

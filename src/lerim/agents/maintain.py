@@ -7,94 +7,99 @@ MIPROv2, BootstrapFewShot, BootstrapFinetune, etc.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import dspy
 
-from lerim.agents.context import RuntimeContext
-from lerim.agents.tools import make_maintain_tools
+from lerim.agents.tools import MemoryTools
 
 
 class MaintainSignature(dspy.Signature):
-    """Run Lerim memory maintenance -- a reflective pass over memory files.
+	"""You are the Lerim memory maintenance agent. Your job is to keep the
+	memory store healthy, consistent, and useful over time. You are the
+	librarian -- you consolidate, deduplicate, update, prune, and organize
+	memories so that future sessions get clean, relevant context.
 
-    Tool reference:
-    - scan_memory_manifest() -- compact list of all memories (name, description, type, filename)
-    - list_files(directory, pattern) / read_file(file_path) -- read files in detail
-    - archive_memory(file_path) -- soft-delete to archived/
-    - edit_memory(file_path, new_content) -- replace file content (must start with ---)
-    - write_memory(type, name, description, body) -- create new memories
-    - update_memory_index(content) -- write MEMORY.md index
+	Memories accumulate from many coding sessions. Without maintenance:
+	- Near-duplicates pile up (same topic extracted multiple times)
+	- Stale memories linger (decisions that were reversed, outdated context)
+	- The index drifts out of sync with actual files
+	- Important patterns across sessions go unrecognized
 
-    ## Phase 1 -- Orient
-    - Call scan_memory_manifest() to see all existing memories
-    - Read MEMORY.md if it exists
-    - Read recent session summaries for context (list_files on summaries/)
+	Your goal: after each maintenance pass, the memory store should be
+	tighter, more accurate, and better organized than before.
 
-    ## Phase 2 -- Gather signal
-    - Check summaries for topics in 3+ sessions with no corresponding memory
-    - Look for memories that contradict current summaries
-    - Note any memories that seem stale or outdated
+	Memory files are named {type}_{topic}.md (e.g. feedback_use_tabs.md,
+	project_dspy_migration.md). The type is encoded in the filename.
+	Each file has YAML frontmatter (name, description, type) and a markdown body.
+	Body structure for feedback/project: rule/fact -> **Why:** -> **How to apply:**
 
-    ## Phase 3 -- Consolidate
-    - Merge near-duplicate memories (keep the richer version, archive the other)
-    - Update memories with new information from summaries via edit_memory()
-    - Archive memories that are: contradicted, trivially obvious, or content-free
-    - Convert relative dates to absolute dates
-    - When 3+ small memories cover same topic, combine into one via write_memory()
+	## Phase 1 -- Orient
+	- Call scan() to see all existing memories (returns filename, description,
+	  modified time for each). Filenames tell you the type and topic.
+	- Call read("index.md") to see current index organization
+	- Call scan("summaries") then read() recent session summaries for context
 
-    ## Phase 4 -- Prune and index
-    - Call update_memory_index() with a fresh index:
-      One line per memory, format: `- [Name](filename.md) -- description`
-      Max 200 lines / 25KB. Never put memory content in the index.
-    - Remove pointers to archived/deleted memories
-    - Add pointers to new/updated memories
+	## Phase 2 -- Gather signal
+	- Check summaries for topics appearing in 3+ sessions with no memory yet
+	  -> These are emerging patterns worth capturing as new memories
+	- Look for memories that contradict information in recent summaries
+	- Note memories that seem stale, outdated, or no longer relevant
+	- Identify near-duplicates (similar filenames, overlapping descriptions)
 
-    Constraints:
-    - ONLY read/write under memory_root and run_folder.
-    - Summaries (memory_root/summaries/) are read-only.
-    - Do NOT delete files. ALWAYS use archive_memory() for soft-delete.
-    - When unsure whether to merge or archive, leave unchanged.
+	## Phase 3 -- Consolidate
+	- Merge near-duplicates: read() both, write() a richer combined version,
+	  archive() the originals
+	- Update memories with new information from summaries via edit()
+	- Archive memories that are: contradicted by later sessions, trivially
+	  obvious, content-free, or superseded by newer memories
+	- Convert relative dates to absolute dates (e.g. "last week" -> "2026-04-01")
+	- When 3+ small memories cover the same topic, write() one combined memory
+	  and archive() the originals
+	- Improve unclear descriptions to be more specific and retrieval-friendly
 
-    Return one short plain-text completion line.
-    """
+	## Phase 4 -- Prune and index
+	- Call scan() to get the manifest of all memory files on disk
+	- Call read("index.md") to see the current index
+	- Compare: every memory from scan() should have an index entry, and every
+	  index entry should point to an existing file. Fix mismatches.
+	- Use edit("index.md", old_string, new_string) to update entries
+	- Organize by semantic sections (## User Preferences, ## Project State, etc.)
+	- Format: - [Title](filename.md) -- one-line description
+	- Max 200 lines / 25KB. Never put memory content in the index.
 
-    memory_root: str = dspy.InputField(
-        desc="Absolute path to the memory root directory"
-    )
-    run_folder: str = dspy.InputField(
-        desc="Absolute path to the run workspace folder"
-    )
-    maintain_actions_path: str = dspy.InputField(
-        desc="Path for maintain_actions.json (optional; runtime fills defaults if missing)"
-    )
-    memory_index_path: str = dspy.InputField(
-        desc="Path to MEMORY.md index file"
-    )
-    completion_summary: str = dspy.OutputField(
-        desc="Short plain-text completion summary"
-    )
+	Constraints:
+	- Summaries (summaries/) are read-only -- do not edit or archive them.
+	- Do NOT delete files. ALWAYS use archive() for soft-delete.
+	- When unsure whether to merge or archive, leave unchanged.
+	- Quality over quantity -- a smaller, accurate memory store is better than
+	  a large noisy one.
+
+	Return one short plain-text completion line.
+	"""
+
+	completion_summary: str = dspy.OutputField(
+		desc="Short plain-text completion summary"
+	)
 
 
 class MaintainAgent(dspy.Module):
-    """DSPy ReAct module for the maintain flow. Independently optimizable."""
+	"""DSPy ReAct module for the maintain flow. Independently optimizable."""
 
-    def __init__(self, ctx: RuntimeContext):
-        super().__init__()
-        self.react = dspy.ReAct(
-            MaintainSignature,
-            tools=make_maintain_tools(ctx),
-            max_iters=ctx.config.lead_role.max_iters_maintain,
-        )
+	def __init__(self, memory_root: Path, max_iters: int = 30):
+		super().__init__()
+		self.tools = MemoryTools(memory_root=memory_root)
+		self.react = dspy.ReAct(
+			MaintainSignature,
+			tools=[
+				self.tools.read,
+				self.tools.scan,
+				self.tools.write,
+				self.tools.edit,
+				self.tools.archive,
+			],
+			max_iters=max_iters,
+		)
 
-    def forward(
-        self,
-        memory_root: str,
-        run_folder: str,
-        maintain_actions_path: str,
-        memory_index_path: str,
-    ) -> dspy.Prediction:
-        return self.react(
-            memory_root=memory_root,
-            run_folder=run_folder,
-            maintain_actions_path=maintain_actions_path,
-            memory_index_path=memory_index_path,
-        )
+	def forward(self) -> dspy.Prediction:
+		return self.react()

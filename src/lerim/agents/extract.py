@@ -1,37 +1,44 @@
 """Extract agent: extract memories from a session trace, dedup, and write.
 
-session trace -> dspy.ReAct(ExtractSignature, tools) -> memory files + report.
+session trace -> dspy.ReAct(ExtractSignature, tools) -> memory files + summary.
 The ReAct agent loop and its internal predictors are optimizable by
 MIPROv2, BootstrapFewShot, BootstrapFinetune, etc.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import dspy
 
-from lerim.agents.context import RuntimeContext
-from lerim.agents.tools import make_extract_tools
+from lerim.agents.tools import MemoryTools
 
 
 class ExtractSignature(dspy.Signature):
 	"""Extract durable memories from a coding-agent session trace.
 
-	You are the memory extraction agent. Read the session trace, identify what's
+	You are the Lerim memory extraction agent. Read the session trace, identify what's
 	worth remembering for future sessions, and write memory files directly.
+
+	Memory files are named {type}_{topic}.md (e.g. feedback_use_tabs.md,
+	project_dspy_migration.md). The type is encoded in the filename.
+	Each file has YAML frontmatter (name, description, type) and a markdown body.
 
 	PRIORITY (overrides default skip and most DO NOT EXTRACT below):
 	If the user explicitly asks to remember, memorize, store, or "keep in mind"
-	something, you MUST call write_memory for that content (usually type user or
-	feedback). Do not treat that as debugging or ephemeral. Do not skip because
-	"uncertain" when the request to remember is clear.
+	something, you MUST call write() for that content (usually type user or
+	feedback) or if exists, edit(). Do not treat that as debugging or ephemeral.
+	Do not skip because "uncertain" when the request to remember is clear.
 
 	Steps:
 
 	1. ORIENT:
-	   Call scan_memory_manifest() to see existing memories.
-	   Call read_file(file_path=trace_path) to read the session trace.
-	   If the trace is large, read_file returns a truncated view -- use it to
-	   identify the key topics, then grep or read specific sections if needed.
+	   Call scan() to see existing memories (returns filename, description,
+	   modified time for each). Filenames tell you the type and topic.
+	   Call read("index.md") to see the current index organization.
+	   Call read("trace", limit=200) to start reading the session trace.
+	   If the trace is large, page through with offset/limit.
+	   Use grep("trace", "remember") to find explicit user requests.
 
 	2. ANALYZE:
 	   From the trace, identify items worth remembering. Apply these criteria:
@@ -58,51 +65,42 @@ class ExtractSignature(dspy.Signature):
 
 	3. DEDUP:
 	   Compare each potential memory against the manifest from step 1.
-	   - Existing memory covers same topic -> skip (no_op)
-	   - Related but adds NEW info -> read the existing file, then edit_memory()
-	   - No match -> write_memory()
+	   - Existing memory covers same topic (check filename and description) -> skip
+	   - Related but adds NEW info -> read() the existing file, then edit() to update
+	   - No match -> write() to create
 	   Default to skipping when uncertain -- duplicates are worse than gaps, unless
 	   PRIORITY (explicit remember/memorize) applies; then write.
 
 	4. WRITE:
 	   For each new memory:
-	   write_memory(type="user"|"feedback"|"project"|"reference",
-	                name="Short title (max 10 words)",
-	                description="One-line hook for retrieval (~150 chars)",
-	                body="Content: rule/fact, then **Why:**, then **How to apply:**")
+	   write(type="user"|"feedback"|"project"|"reference",
+	         name="Short title (max 10 words)",
+	         description="One-line hook for retrieval (~150 chars)",
+	         body="Content: rule/fact, then **Why:**, then **How to apply:**")
+
+	   To update an existing memory, use read() then edit() with the changes.
 
 	5. INDEX:
-	   Call update_memory_index() with a fresh index of all memories.
+	   Call scan() to get the manifest of all memory files on disk.
+	   Call read("index.md") to see the current index.
+	   Compare: every memory file from scan() should have an entry in
+	   index.md, and every entry in index.md should point to an existing
+	   file. Fix any mismatches -- add missing entries, remove stale ones.
+	   Use edit("index.md", old_string, new_string) to update entries.
+	   Organize entries semantically by section (## User Preferences,
+	   ## Project State, etc.), not flat.
+	   Format: - [Title](filename.md) -- one-line description
 
 	6. SUMMARIZE:
-	   Call write_summary() with:
-	   - title: Short session title (max 10 words)
-	   - description: One-line description of what the session achieved
-	   - user_intent: The user's overall goal (at most 150 words)
-	   - session_narrative: What happened chronologically (at most 200 words)
-	   - tags: Comma-separated topic tags
+	   Write a session summary:
+	   write(type="summary",
+	         name="Short session title (max 10 words)",
+	         description="One-line description of what was achieved",
+	         body="## User Intent\\n<goal, max 150 words>\\n\\n## What Happened\\n<narrative, max 200 words>")
 
 	Return a short completion line.
 	"""
 
-	trace_path: str = dspy.InputField(
-		desc="Absolute path to the session trace file"
-	)
-	memory_root: str = dspy.InputField(
-		desc="Absolute path to the memory root directory"
-	)
-	run_folder: str = dspy.InputField(
-		desc="Absolute path to the run workspace folder"
-	)
-	memory_actions_path: str = dspy.InputField(
-		desc="Path for memory_actions.json workspace artifact (optional; runtime may default)"
-	)
-	memory_index_path: str = dspy.InputField(
-		desc="Path to MEMORY.md index file"
-	)
-	run_id: str = dspy.InputField(
-		desc="Unique run identifier"
-	)
 	completion_summary: str = dspy.OutputField(
 		desc="Short plain-text completion summary"
 	)
@@ -111,28 +109,25 @@ class ExtractSignature(dspy.Signature):
 class ExtractAgent(dspy.Module):
 	"""DSPy ReAct module for the extract flow. Independently optimizable."""
 
-	def __init__(self, ctx: RuntimeContext):
+	def __init__(self, memory_root: Path, trace_path: Path,
+	             run_folder: Path | None = None, max_iters: int = 15):
 		super().__init__()
+		self.tools = MemoryTools(
+			memory_root=memory_root,
+			trace_path=trace_path,
+			run_folder=run_folder,
+		)
 		self.react = dspy.ReAct(
 			ExtractSignature,
-			tools=make_extract_tools(ctx),
-			max_iters=ctx.config.lead_role.max_iters_sync,
+			tools=[
+				self.tools.read,
+				self.tools.grep,
+				self.tools.scan,
+				self.tools.write,
+				self.tools.edit,
+			],
+			max_iters=max_iters,
 		)
 
-	def forward(
-		self,
-		trace_path: str,
-		memory_root: str,
-		run_folder: str,
-		memory_actions_path: str,
-		memory_index_path: str,
-		run_id: str,
-	) -> dspy.Prediction:
-		return self.react(
-			trace_path=trace_path,
-			memory_root=memory_root,
-			run_folder=run_folder,
-			memory_actions_path=memory_actions_path,
-			memory_index_path=memory_index_path,
-			run_id=run_id,
-		)
+	def forward(self) -> dspy.Prediction:
+		return self.react()
