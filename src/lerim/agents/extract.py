@@ -98,6 +98,11 @@ class ExtractSignature(dspy.Signature):
 	         body="## User Intent\\n<goal, max 150 words>\\n\\n## What Happened\\n<narrative, max 200 words>")
 
 	Return a short completion line.
+
+	IMPORTANT: When producing output, use these EXACT XML tag names:
+	<next_thought> for your reasoning, <next_tool_name> for the tool,
+	<next_tool_args> for the arguments. Never use <thought>, <tool_name>,
+	<tool_args>, or any other variant.
 	"""
 
 	completion_summary: str = dspy.OutputField(
@@ -130,7 +135,9 @@ class ExtractAgent(dspy.Module):
 		)
 
 	def forward(self) -> dspy.Prediction:
-		with dspy.context(adapter=dspy.XMLAdapter()):
+		from lerim.agents.retry_adapter import RetryAdapter
+		adapter = RetryAdapter(dspy.XMLAdapter())
+		with dspy.context(adapter=adapter):
 			return self.react()
 
 

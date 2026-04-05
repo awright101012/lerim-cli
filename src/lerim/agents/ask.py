@@ -72,6 +72,11 @@ class AskSignature(dspy.Signature):
 	- summaries/*.md -- session summaries (date-prefixed)
 	- index.md -- semantic index organized by section
 	Each memory file: YAML frontmatter (name, description, type) + markdown body.
+
+	IMPORTANT: When producing output, use these EXACT XML tag names:
+	<next_thought> for your reasoning, <next_tool_name> for the tool,
+	<next_tool_args> for the arguments. Never use <thought>, <tool_name>,
+	<tool_args>, or any other variant.
 	"""
 
 	question: str = dspy.InputField(
@@ -105,7 +110,9 @@ class AskAgent(dspy.Module):
 		question: str,
 		hints: str,
 	) -> dspy.Prediction:
-		with dspy.context(adapter=dspy.XMLAdapter()):
+		from lerim.agents.retry_adapter import RetryAdapter
+		adapter = RetryAdapter(dspy.XMLAdapter())
+		with dspy.context(adapter=adapter):
 			return self.react(
 				question=question,
 				hints=hints,
