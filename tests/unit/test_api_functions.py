@@ -9,6 +9,7 @@ filesystem, and subprocess calls.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import subprocess
 import urllib.error
@@ -16,7 +17,7 @@ import urllib.request
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -92,7 +93,7 @@ def test_write_init_config_saves_agents(monkeypatch, tmp_path) -> None:
 	monkeypatch.setattr(api_mod, "USER_CONFIG_PATH", tmp_path / "config.toml")
 
 	selected = {"claude": "/home/user/.claude/projects", "codex": "/home/user/.codex"}
-	result = write_init_config(selected)
+	write_init_config(selected)
 
 	assert len(saved) == 1
 	assert saved[0] == {"agents": selected}
@@ -752,8 +753,6 @@ def test_find_package_root_returns_path_or_none() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-from contextlib import contextmanager
 
 
 @contextmanager

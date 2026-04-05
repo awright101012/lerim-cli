@@ -14,21 +14,16 @@ import argparse
 import io
 import json
 import sys
-import textwrap
-import time
 from contextlib import redirect_stdout, redirect_stderr
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from lerim.server import cli
 from lerim.config.project_scope import ScopeResolution
-from tests.helpers import make_config, run_cli, run_cli_json, write_test_config
-from lerim.config.settings import reload_config
+from tests.helpers import make_config
 
 
 # ---------------------------------------------------------------------------

@@ -6,8 +6,6 @@ runtime.py, tools.py, or any agent module to avoid circular imports.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel
 
 

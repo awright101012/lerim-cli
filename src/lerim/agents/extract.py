@@ -81,12 +81,11 @@ class ExtractSignature(dspy.Signature):
 	   To update an existing memory, use read() then edit() with the changes.
 
 	5. INDEX:
-	   Call scan() to get the manifest of all memory files on disk.
-	   Call read("index.md") to see the current index.
-	   Compare: every memory file from scan() should have an entry in
-	   index.md, and every entry in index.md should point to an existing
-	   file. Fix any mismatches -- add missing entries, remove stale ones.
-	   Use edit("index.md", old_string, new_string) to update entries.
+	   Call verify_index() to check if index.md matches actual files.
+	   If NOT OK: use edit("index.md", ...) to add missing entries and
+	   remove stale ones.
+	   If OK or after fixing: call read("index.md") for a final check.
+	   Verify format, section organization, and descriptions are clear.
 	   Organize entries semantically by section (## User Preferences,
 	   ## Project State, etc.), not flat.
 	   Format: - [Title](filename.md) -- one-line description
@@ -125,6 +124,7 @@ class ExtractAgent(dspy.Module):
 				self.tools.scan,
 				self.tools.write,
 				self.tools.edit,
+				self.tools.verify_index,
 			],
 			max_iters=max_iters,
 		)

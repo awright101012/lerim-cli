@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -404,6 +403,66 @@ class TestArchive:
 
 
 # ---------------------------------------------------------------------------
+# verify_index
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyIndex:
+	def test_ok_when_consistent(self, tools, mem_root):
+		"""Returns OK when index.md matches all memory files."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		(mem_root / "index.md").write_text(
+			"# Memory\n\n- [Tabs](feedback_tabs.md) — pref\n- [Arch](project_arch.md) — arch\n"
+		)
+		result = tools.verify_index()
+		assert result.startswith("OK")
+		assert "2 files" in result
+
+	def test_missing_from_index(self, tools, mem_root):
+		"""Reports files missing from index."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		(mem_root / "index.md").write_text(
+			"# Memory\n\n- [Tabs](feedback_tabs.md) — pref\n"
+		)
+		result = tools.verify_index()
+		assert "NOT OK" in result
+		assert "project_arch.md" in result
+		assert "Missing from index" in result
+
+	def test_stale_in_index(self, tools, mem_root):
+		"""Reports index entries pointing to nonexistent files."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		(mem_root / "index.md").write_text(
+			"# Memory\n\n- [Tabs](feedback_tabs.md) — pref\n- [Old](feedback_old.md) — gone\n"
+		)
+		result = tools.verify_index()
+		assert "NOT OK" in result
+		assert "feedback_old.md" in result
+		assert "Stale" in result
+
+	def test_no_index_file(self, tools, mem_root):
+		"""Reports missing entries when index.md doesn't exist."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		result = tools.verify_index()
+		assert "NOT OK" in result
+		assert "feedback_tabs.md" in result
+
+	def test_empty_memory_root(self, tools):
+		"""Returns OK when both memory root and index are empty."""
+		result = tools.verify_index()
+		assert result.startswith("OK")
+
+	def test_includes_description_for_missing(self, tools, mem_root):
+		"""Missing entries include the file's description to help the agent."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Prefer tabs over spaces")
+		(mem_root / "index.md").write_text("# Memory\n")
+		result = tools.verify_index()
+		assert "Prefer tabs over spaces" in result
+
+
+# ---------------------------------------------------------------------------
 # DSPy tool introspection
 # ---------------------------------------------------------------------------
 
@@ -411,24 +470,24 @@ class TestArchive:
 class TestDspyIntrospection:
 	def test_tools_are_callable_methods(self, tools):
 		"""All tool methods are callable bound methods."""
-		for method in [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.archive]:
+		for method in [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.archive, tools.verify_index]:
 			assert callable(method)
 
 	def test_tool_selection_per_agent(self, tools):
 		"""Each agent gets the correct subset of tools."""
-		extract = [tools.read, tools.grep, tools.scan, tools.write, tools.edit]
-		maintain = [tools.read, tools.scan, tools.write, tools.edit, tools.archive]
+		extract = [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.verify_index]
+		maintain = [tools.read, tools.scan, tools.write, tools.edit, tools.archive, tools.verify_index]
 		ask = [tools.read, tools.scan]
 
-		assert len(extract) == 5
-		assert len(maintain) == 5
+		assert len(extract) == 6
+		assert len(maintain) == 6
 		assert len(ask) == 2
 
 	def test_dspy_tool_wrapping(self, tools):
 		"""dspy.Tool should correctly wrap each method."""
 		import dspy
-		methods = [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.archive]
-		expected_names = {"read", "grep", "scan", "write", "edit", "archive"}
+		methods = [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.archive, tools.verify_index]
+		expected_names = {"read", "grep", "scan", "write", "edit", "archive", "verify_index"}
 		seen = set()
 		for method in methods:
 			dt = dspy.Tool(method)

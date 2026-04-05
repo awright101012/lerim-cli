@@ -15,7 +15,6 @@ from http.server import HTTPServer
 from pathlib import Path
 from threading import Thread
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -574,7 +573,7 @@ def test_get_session_redirect(test_server):
 	"""GET /session/<id> redirects to /?tab=runs."""
 	port, _, _ = test_server
 	url = f"http://127.0.0.1:{port}/session/test-123"
-	req = urllib.request.Request(url)
+	urllib.request.Request(url)
 	# Disable redirect following to check the 302
 	import http.client
 	conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -853,10 +852,10 @@ def test_post_empty_body(test_server):
 	try:
 		with urllib.request.urlopen(req, timeout=5) as resp:
 			status = resp.status
-			body = json.loads(resp.read())
+			json.loads(resp.read())
 	except urllib.error.HTTPError as exc:
 		status = exc.code
-		body = json.loads(exc.read())
+		json.loads(exc.read())
 	assert status == 400
 
 
@@ -871,10 +870,10 @@ def test_post_invalid_json(test_server):
 	try:
 		with urllib.request.urlopen(req, timeout=5) as resp:
 			status = resp.status
-			body = json.loads(resp.read())
+			json.loads(resp.read())
 	except urllib.error.HTTPError as exc:
 		status = exc.code
-		body = json.loads(exc.read())
+		json.loads(exc.read())
 	# _read_json_body returns {} on bad JSON, so question will be empty -> 400
 	assert status == 400
 

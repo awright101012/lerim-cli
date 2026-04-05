@@ -244,7 +244,7 @@ def test_compact_jsonl_identity_cleaner():
 	"""Cleaner that returns input unchanged preserves all lines."""
 	raw = '{"a":1}\n{"b":2}\n'
 	result = compact_jsonl(raw, lambda obj: obj)
-	lines = [l for l in result.strip().split("\n") if l]
+	lines = [line for line in result.strip().split("\n") if line]
 	assert len(lines) == 2
 	assert json.loads(lines[0]) == {"a": 1}
 	assert json.loads(lines[1]) == {"b": 2}
@@ -261,7 +261,7 @@ def test_compact_jsonl_drop_lines():
 		return obj
 
 	result = compact_jsonl(raw, cleaner)
-	lines = [l for l in result.strip().split("\n") if l]
+	lines = [line for line in result.strip().split("\n") if line]
 	assert len(lines) == 1
 	assert json.loads(lines[0]) == {"keep": True}
 
@@ -270,7 +270,7 @@ def test_compact_jsonl_non_json_lines_kept():
 	"""Non-JSON lines pass through unchanged."""
 	raw = 'not-json\n{"a":1}\n'
 	result = compact_jsonl(raw, lambda obj: obj)
-	lines = [l for l in result.strip().split("\n") if l]
+	lines = [line for line in result.strip().split("\n") if line]
 	assert lines[0] == "not-json"
 	assert json.loads(lines[1]) == {"a": 1}
 
@@ -279,7 +279,7 @@ def test_compact_jsonl_empty_lines_skipped():
 	"""Empty lines are dropped from output."""
 	raw = '\n\n{"a":1}\n\n'
 	result = compact_jsonl(raw, lambda obj: obj)
-	lines = [l for l in result.strip().split("\n") if l]
+	lines = [line for line in result.strip().split("\n") if line]
 	assert len(lines) == 1
 
 

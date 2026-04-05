@@ -233,6 +233,53 @@ class MemoryTools:
 		return json.dumps({"count": len(file_list), "files": file_list}, indent=2)
 
 
+	# ── Verify Index ────────────────────────────────────────────────────
+
+	def verify_index(self) -> str:
+		"""Check if index.md is consistent with actual memory files.
+
+		Compares memory files on disk against entries in index.md.
+		Returns OK if consistent, or a report of mismatches so you
+		can fix them with edit("index.md", ...).
+
+		After fixing, call read("index.md") for a final format check.
+		"""
+		import frontmatter as fm_lib
+
+		index_path = self.memory_root / "index.md"
+		md_files = sorted(self.memory_root.glob("*.md"))
+		memory_files = {f.name for f in md_files if f.name != "index.md"}
+
+		# Parse index entries — look for markdown links: [Title](filename.md)
+		index_entries: set[str] = set()
+		if index_path.exists():
+			for line in index_path.read_text(encoding="utf-8").splitlines():
+				match = re.search(r"\]\(([^)]+\.md)\)", line)
+				if match:
+					index_entries.add(match.group(1))
+
+		missing_from_index = memory_files - index_entries
+		stale_in_index = index_entries - memory_files
+
+		if not missing_from_index and not stale_in_index:
+			return f"OK: index.md is consistent ({len(memory_files)} files, {len(index_entries)} entries)"
+
+		parts = ["NOT OK:"]
+		if missing_from_index:
+			# Include descriptions to help agent write the index entry
+			for fname in sorted(missing_from_index):
+				desc = ""
+				try:
+					post = fm_lib.load(str(self.memory_root / fname))
+					desc = post.get("description", "")
+				except Exception:
+					pass
+				parts.append(f"  Missing from index: {fname} — {desc}" if desc else f"  Missing from index: {fname}")
+		if stale_in_index:
+			for fname in sorted(stale_in_index):
+				parts.append(f"  Stale in index (file not found): {fname}")
+		return "\n".join(parts)
+
 	# ── Write ───────────────────────────────────────────────────────────
 
 	def write(self, type: str, name: str, description: str, body: str) -> str:
@@ -536,7 +583,8 @@ if __name__ == "__main__":
 	print("=" * 60)
 
 	# Use a temp dir so we don't pollute real memory
-	import tempfile, shutil, json
+	import tempfile
+	import json
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		tw = MemoryTools(memory_root=tmp_path)

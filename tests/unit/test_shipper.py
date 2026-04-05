@@ -11,11 +11,9 @@ import asyncio
 import json
 import sqlite3
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from lerim.cloud.shipper import (
 	_ShipperState,

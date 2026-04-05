@@ -12,12 +12,8 @@ import io
 import json
 import socket
 import urllib.error
-from http.server import HTTPServer
-from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from lerim.cloud import auth as auth_mod
 from lerim.cloud.auth import (

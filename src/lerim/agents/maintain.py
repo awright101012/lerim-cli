@@ -59,11 +59,10 @@ class MaintainSignature(dspy.Signature):
 	- Improve unclear descriptions to be more specific and retrieval-friendly
 
 	## Phase 4 -- Prune and index
-	- Call scan() to get the manifest of all memory files on disk
-	- Call read("index.md") to see the current index
-	- Compare: every memory from scan() should have an index entry, and every
-	  index entry should point to an existing file. Fix mismatches.
-	- Use edit("index.md", old_string, new_string) to update entries
+	- Call verify_index() to check if index.md matches actual files
+	- If NOT OK: use edit("index.md", ...) to add missing entries, remove stale ones
+	- If OK or after fixing: call read("index.md") for a final check
+	- Verify format, section organization, and descriptions are clear
 	- Organize by semantic sections (## User Preferences, ## Project State, etc.)
 	- Format: - [Title](filename.md) -- one-line description
 	- Max 200 lines / 25KB. Never put memory content in the index.
@@ -97,6 +96,7 @@ class MaintainAgent(dspy.Module):
 				self.tools.write,
 				self.tools.edit,
 				self.tools.archive,
+				self.tools.verify_index,
 			],
 			max_iters=max_iters,
 		)
