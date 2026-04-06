@@ -682,6 +682,50 @@ class TestVerifyIndex:
 		assert result.startswith("OK")
 		assert "1 files" in result or "1 entries" in result
 
+	def test_duplicate_entry_detected(self, tools, mem_root):
+		"""Reports when the same filename appears twice in index.md."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		(mem_root / "index.md").write_text(
+			"# Memory\n\n"
+			"## User Preferences\n"
+			"- [Tabs](feedback_tabs.md) — pref\n\n"
+			"## Project State\n"
+			"- [Arch](project_arch.md) — arch\n"
+			"- [Arch duplicate](project_arch.md) — listed again\n"
+		)
+		result = tools.verify_index()
+		assert "NOT OK" in result
+		assert "Duplicate entry in index: project_arch.md" in result
+
+	def test_duplicate_only_issue(self, tools, mem_root):
+		"""Duplicate is the only issue -> still NOT OK."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		(mem_root / "index.md").write_text(
+			"# Memory\n\n"
+			"- [Tabs](feedback_tabs.md) — pref\n"
+			"- [Tabs again](feedback_tabs.md) — duplicate\n"
+		)
+		result = tools.verify_index()
+		assert "NOT OK" in result
+		assert "Duplicate entry in index: feedback_tabs.md" in result
+		# No missing or stale issues
+		assert "Missing from index" not in result
+		assert "Stale" not in result
+
+	def test_no_duplicate_when_unique(self, tools, mem_root):
+		"""No duplicate report when each file appears exactly once."""
+		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		(mem_root / "index.md").write_text(
+			"# Memory\n\n"
+			"- [Tabs](feedback_tabs.md) — pref\n"
+			"- [Arch](project_arch.md) — arch\n"
+		)
+		result = tools.verify_index()
+		assert result.startswith("OK")
+		assert "Duplicate" not in result
+
 
 # ---------------------------------------------------------------------------
 # DSPy tool introspection

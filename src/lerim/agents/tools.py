@@ -254,12 +254,21 @@ class MemoryTools:
 		memory_files = {f.name for f in md_files if f.name != "index.md"}
 
 		# Parse index entries — look for markdown links: [Title](filename.md)
-		index_entries: set[str] = set()
+		index_entry_list: list[str] = []
 		if index_path.exists():
 			for line in index_path.read_text(encoding="utf-8").splitlines():
 				match = re.search(r"\]\(([^)]+\.md)\)", line)
 				if match:
-					index_entries.add(match.group(1))
+					index_entry_list.append(match.group(1))
+		index_entries: set[str] = set(index_entry_list)
+
+		# Detect duplicate entries (same filename linked more than once)
+		seen: set[str] = set()
+		duplicates: set[str] = set()
+		for entry in index_entry_list:
+			if entry in seen:
+				duplicates.add(entry)
+			seen.add(entry)
 
 		missing_from_index = memory_files - index_entries
 		stale_in_index = index_entries - memory_files
@@ -273,7 +282,7 @@ class MemoryTools:
 			if not resolved.is_file():
 				broken_links.add(entry)
 
-		if not missing_from_index and not stale_in_index and not broken_links:
+		if not missing_from_index and not stale_in_index and not broken_links and not duplicates:
 			return f"OK: index.md is consistent ({len(memory_files)} files, {len(index_entries)} entries)"
 
 		parts = ["NOT OK:"]
@@ -293,6 +302,9 @@ class MemoryTools:
 		if broken_links:
 			for fname in sorted(broken_links):
 				parts.append(f"  Broken link (file missing on disk): {fname}")
+		if duplicates:
+			for fname in sorted(duplicates):
+				parts.append(f"  Duplicate entry in index: {fname}")
 		return "\n".join(parts)
 
 	# ── Write ───────────────────────────────────────────────────────────
@@ -307,14 +319,23 @@ class MemoryTools:
 		For summaries, use type="summary" — the file is written to the
 		summaries/ subdirectory.
 
+		Before writing, verify your body against the <context> format rules
+		and <extraction_criteria> from your instructions.
+		Checklist:
+		- feedback/project body must use **Why:** and **How to apply:**
+		  (inline bold, NOT ## headings — headings are for summaries only)
+		- No file paths like src/foo.py — use conceptual descriptions
+		- Max 20 lines in body — one topic per memory
+		- Content must not be code-derivable (git log, README, etc.)
+
 		Args:
 			type: One of "user", "feedback", "project", "reference",
 				"summary".
 			name: Short title, max ~10 words. Used to generate filename.
 			description: One-line retrieval hook, ~150 chars.
-			body: Content. For feedback/project: rule, then Why, then
-				How to apply. For summary: ## User Intent and
-				## What Happened sections.
+			body: Content. For feedback/project: rule, then **Why:**,
+				then **How to apply:**. For summary: ## User Intent
+				and ## What Happened sections.
 		"""
 		import json
 

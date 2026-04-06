@@ -117,8 +117,7 @@ class AskAgent(dspy.Module):
 		question: str,
 		hints: str,
 	) -> dspy.Prediction:
-		from lerim.agents.retry_adapter import RetryAdapter
-		adapter = RetryAdapter(dspy.XMLAdapter())
+		adapter = dspy.ChatAdapter(use_native_function_calling=True)
 		with dspy.context(adapter=adapter):
 			return self.react(
 				question=question,

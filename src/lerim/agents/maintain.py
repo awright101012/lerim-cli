@@ -39,6 +39,26 @@ class MaintainSignature(dspy.Signature):
 	<rule>When unsure whether to merge or archive, leave unchanged.</rule>
 	<rule>Quality over quantity -- a smaller, accurate store is better than a large noisy one.</rule>
 	<rule>Max 200 lines / 25KB for index.md. Never put memory content in the index.</rule>
+	<rule>Overlong memories: if a memory body exceeds 20 lines, it is likely a
+	changelog or dump. Condense to the core principle (fact + **Why:** +
+	**How to apply:**, max 15 lines) via edit(), then archive() the verbose
+	original only if information was truly lost.</rule>
+	<rule>Stale file paths: if a memory references source paths like
+	src/lerim/agents/retry_adapter.py or any .py/.ts file path, edit() to
+	replace with conceptual descriptions (e.g. "the retry adapter module",
+	"the extraction agent"). Paths rot after refactors; concepts survive.</rule>
+	<rule>Stale implementation details: if a memory references files, functions,
+	or modules that no longer exist (e.g. oai_tools.py, extract_pipeline.py),
+	archive() the memory or edit() out the stale parts. Cross-check with
+	scan() if uncertain.</rule>
+	<rule>Duplicate index entries: when verify_index() reports OK but index.md
+	lists the same file twice, edit("index.md") to remove the duplicate line.
+	Keep the entry with the better description.</rule>
+	<rule>Wrong body format: project_ and feedback_ memories must use inline
+	bold format (**Why:** / **How to apply:**), NOT markdown headings
+	(## Why). If you find ## headings in these memory bodies, edit() to
+	rewrite as: fact/rule, then **Why:** paragraph, then **How to apply:**
+	paragraph.</rule>
 	</rules>
 
 	<steps>
@@ -49,13 +69,21 @@ class MaintainSignature(dspy.Signature):
 	<step name="gather_signal">Check summaries for topics in 3+ sessions
 	with no memory yet (emerging patterns). Look for contradictions between
 	memories and recent summaries. Note stale or outdated memories.
-	Identify near-duplicates (similar filenames, overlapping descriptions).</step>
+	Identify near-duplicates (similar filenames, overlapping descriptions).
+	Flag: overlong bodies (>20 lines), .py/.ts file paths in body text,
+	references to modules/files that may no longer exist, duplicate lines
+	in index.md, and project_/feedback_ memories using ## headings instead
+	of **bold:** inline format.</step>
 
 	<step name="consolidate">Merge near-duplicates: read() both, write()
 	combined version, archive() originals. Update memories with new info
 	via edit(). Archive contradicted, obvious, or superseded memories.
 	Convert relative dates to absolute. When 3+ small memories cover the
-	same topic, combine into one.</step>
+	same topic, combine into one.
+	Fix flagged quality issues: condense overlong memories, replace file
+	paths with conceptual names, remove or archive stale references,
+	rewrite ## headings to **bold:** inline format in project/feedback
+	memories.</step>
 
 	<step name="prune_and_index">Call verify_index() to check index.md.
 	If NOT OK: edit("index.md") to fix. Organize by semantic sections
@@ -97,7 +125,6 @@ class MaintainAgent(dspy.Module):
 		)
 
 	def forward(self) -> dspy.Prediction:
-		from lerim.agents.retry_adapter import RetryAdapter
-		adapter = RetryAdapter(dspy.XMLAdapter())
+		adapter = dspy.ChatAdapter(use_native_function_calling=True)
 		with dspy.context(adapter=adapter):
 			return self.react()

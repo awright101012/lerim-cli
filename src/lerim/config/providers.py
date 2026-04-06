@@ -209,8 +209,10 @@ def _build_dspy_lm_for_provider(
 		}[provider]
 		if not api_key:
 			raise RuntimeError(f"missing_api_key:{env_name} required for {role_label}")
+		# Use native litellm prefix when available (enables function calling support).
+		litellm_prefix = {"minimax": "minimax", "zai": "zai", "openai": "openai"}[provider]
 		return dspy.LM(
-			f"openai/{model}",
+			f"{litellm_prefix}/{model}",
 			api_key=api_key,
 			api_base=api_base or _default_api_base(provider),
 			temperature=temperature,

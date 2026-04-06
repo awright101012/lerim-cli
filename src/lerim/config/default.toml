@@ -24,7 +24,7 @@ max_iters_maintain = 50                # max ReAct iterations for agent role in 
 max_iters_ask = 15                     # max ReAct iterations for agent role in ask flow
 openrouter_provider_order = []
 thinking = true
-temperature = 1.0
+temperature = 0.1
 max_tokens = 32000
 
 [providers]
