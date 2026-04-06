@@ -71,21 +71,19 @@ def test_type_conversion_non_empty_string():
 def test_role_config_construction():
     """_build_role produces RoleConfig from explicit config values."""
     role = _build_role(
-        {"timeout_seconds": 300, "max_iterations": 10},
+        {},
         default_provider="openrouter",
         default_model="qwen/qwen3-coder-30b-a3b-instruct",
     )
     assert isinstance(role, RoleConfig)
     assert role.provider == "openrouter"
     assert role.model == "qwen/qwen3-coder-30b-a3b-instruct"
-    assert role.timeout_seconds == 300
 
 
 def test_dspy_role_config_construction():
     """_build_role produces RoleConfig with DSPy fields from explicit values."""
     role = _build_role(
         {
-            "timeout_seconds": 180,
             "max_window_tokens": 300000,
             "window_overlap_tokens": 5000,
         },
@@ -126,7 +124,7 @@ def test_config_env_var_override(tmp_path, monkeypatch):
     config_path = write_test_config(tmp_path)
     monkeypatch.setenv("LERIM_CONFIG", str(config_path))
     cfg = reload_config()
-    assert cfg.data_dir == tmp_path
+    assert cfg.global_data_dir == tmp_path
 
 
 def test_config_public_dict(tmp_path):
@@ -140,10 +138,3 @@ def test_config_public_dict(tmp_path):
     assert "zai_api_key" not in d
     # Should have public fields
     assert "data_dir" in d
-    assert "memory_scope" in d
-
-
-def test_config_has_memory_scope(tmp_path):
-    """Config exposes memory_scope."""
-    cfg = make_config(tmp_path)
-    assert isinstance(cfg.memory_scope, str)

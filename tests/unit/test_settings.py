@@ -308,25 +308,12 @@ def test_agent_role_explicit_overrides():
         {
             "provider": "anthropic",
             "model": "claude-3",
-            "timeout_seconds": 600,
-            "max_iterations": 10,
         },
         default_provider="openrouter",
         default_model="default-model",
     )
     assert role.provider == "anthropic"
     assert role.model == "claude-3"
-    assert role.timeout_seconds == 600
-
-
-def test_agent_role_timeout_minimum():
-    """_build_role enforces minimum timeout of 10s."""
-    role = _build_role(
-        {"timeout_seconds": 5, "max_iterations": 10},
-        default_provider="openrouter",
-        default_model="m",
-    )
-    assert role.timeout_seconds == 10
 
 
 def test_dspy_role_explicit_windowing():
@@ -335,7 +322,6 @@ def test_dspy_role_explicit_windowing():
         {
             "provider": "ollama",
             "model": "qwen3:8b",
-            "timeout_seconds": 180,
             "max_window_tokens": 50000,
             "window_overlap_tokens": 2000,
         },

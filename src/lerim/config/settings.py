@@ -40,12 +40,10 @@ class RoleConfig:
 	model: str
 	api_base: str = ""
 	fallback_models: tuple[str, ...] = ()
-	timeout_seconds: int = 300
 	openrouter_provider_order: tuple[str, ...] = ()
 	thinking: bool = True
 	max_tokens: int = 32000
 	# Agent-specific
-	max_iterations: int = 10
 	max_iters_sync: int = 15
 	max_iters_maintain: int = 30
 	max_iters_ask: int = 30
@@ -190,16 +188,12 @@ class Config:
     sessions_db_path: Path
     platforms_path: Path
 
-    memory_scope: str
-    memory_project_dir_name: str
-
     server_host: str
     server_port: int
     sync_interval_minutes: int
     maintain_interval_minutes: int
     sync_window_days: int
     sync_max_sessions: int
-    parallel_pipelines: bool
 
     agent_role: RoleConfig
 
@@ -230,8 +224,6 @@ class Config:
             "index_dir": str(self.index_dir),
             "sessions_db_path": str(self.sessions_db_path),
             "platforms_path": str(self.platforms_path),
-            "memory_scope": self.memory_scope,
-            "memory_project_dir_name": self.memory_project_dir_name,
             "server_host": self.server_host,
             "server_port": self.server_port,
             "sync_interval_minutes": self.sync_interval_minutes,
@@ -241,13 +233,10 @@ class Config:
                 "model": self.agent_role.model,
                 "api_base": self.agent_role.api_base,
                 "fallback_models": list(self.agent_role.fallback_models),
-                "timeout_seconds": self.agent_role.timeout_seconds,
-                "max_iterations": self.agent_role.max_iterations,
                 "openrouter_provider_order": list(
                     self.agent_role.openrouter_provider_order
                 ),
             },
-            "parallel_pipelines": self.parallel_pipelines,
             "mlflow_enabled": self.mlflow_enabled,
             "provider_api_bases": dict(self.provider_api_bases),
             "auto_unload": self.auto_unload,
@@ -282,11 +271,9 @@ def _build_role(
 		model=model,
 		api_base=_to_non_empty_string(raw.get("api_base")),
 		fallback_models=_to_fallback_models(raw.get("fallback_models")),
-		timeout_seconds=_require_int(raw, "timeout_seconds", minimum=10),
 		openrouter_provider_order=_to_string_tuple(raw.get("openrouter_provider_order")),
 		thinking=bool(raw.get("thinking", True)),
 		max_tokens=int(raw.get("max_tokens", 32000)),
-		max_iterations=int(raw.get("max_iterations", 10)),
 		max_iters_sync=int(raw.get("max_iters_sync", 15)),
 		max_iters_maintain=int(raw.get("max_iters_maintain", 30)),
 		max_iters_ask=int(raw.get("max_iters_ask", 30)),
@@ -351,21 +338,11 @@ def load_config() -> Config:
     _LAST_CONFIG_SOURCES = sources
 
     data = toml_data.get("data", {})
-    memory = toml_data.get("memory", {})
     server = toml_data.get("server", {})
     roles = _ensure_dict(toml_data, "roles")
     global_data_dir = _expand(data.get("dir"), GLOBAL_DATA_DIR)
 
-    memory_scope = (
-        _to_non_empty_string(memory.get("scope")).lower() or "project_fallback_global"
-    )
-    memory_project_dir_name = (
-        _to_non_empty_string(memory.get("project_dir_name")) or ".lerim"
-    )
-
     scope = resolve_data_dirs(
-        scope=memory_scope,
-        project_dir_name=memory_project_dir_name,
         global_data_dir=global_data_dir,
         repo_path=Path.cwd(),
     )
@@ -414,8 +391,6 @@ def load_config() -> Config:
         index_dir=index_dir,
         sessions_db_path=global_data_dir / "index" / "sessions.sqlite3",
         platforms_path=global_data_dir / "platforms.json",
-        memory_scope=memory_scope,
-        memory_project_dir_name=memory_project_dir_name,
         server_host=_to_non_empty_string(server.get("host")) or "127.0.0.1",
         server_port=port,
         sync_interval_minutes=_require_int(server, "sync_interval_minutes", minimum=1),
@@ -424,7 +399,6 @@ def load_config() -> Config:
         ),
         sync_window_days=_require_int(server, "sync_window_days", minimum=1),
         sync_max_sessions=_require_int(server, "sync_max_sessions", minimum=1),
-        parallel_pipelines=bool(server.get("parallel_pipelines", True)),
         agent_role=agent_role,
         mlflow_enabled=os.getenv("LERIM_MLFLOW", "").strip().lower()
         in ("1", "true", "yes", "on"),

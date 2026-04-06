@@ -45,7 +45,6 @@ def test_build_dspy_lm_ollama(tmp_path):
     ollama_role = _RC(
         provider="ollama",
         model="qwen3:4b",
-        timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
     )
@@ -65,7 +64,6 @@ def test_build_dspy_lm_openrouter(tmp_path):
     or_role = RoleConfig(
         provider="openrouter",
         model="test/model",
-        timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
         openrouter_provider_order=("nebius",),
@@ -85,7 +83,6 @@ def test_build_dspy_lm_zai(tmp_path):
     zai_role = RoleConfig(
         provider="zai",
         model="glm-4.5-air",
-        timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
     )
@@ -104,7 +101,6 @@ def test_build_dspy_lm_mlx(tmp_path):
     mlx_role = RoleConfig(
         provider="mlx",
         model="mlx-community/Qwen3.5-9B-4bit",
-        timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
     )
@@ -142,7 +138,6 @@ def test_missing_api_key_raises(tmp_path):
     or_role = RoleConfig(
         provider="openrouter",
         model="test/model",
-        timeout_seconds=120,
         max_window_tokens=300000,
         window_overlap_tokens=5000,
     )
@@ -184,7 +179,6 @@ def test_build_dspy_fallback_lms_agent_with_fallbacks(tmp_path):
         provider="openrouter",
         model="x-ai/grok-4.1-fast",
         fallback_models=("openrouter:qwen/qwen3-coder",),
-        timeout_seconds=120,
     )
     cfg = replace(cfg, agent_role=role, openrouter_api_key="test-key")
     lms = build_dspy_fallback_lms("agent", config=cfg)

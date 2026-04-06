@@ -308,7 +308,6 @@ def test_runtime_init_builds_fallback_lms(tmp_path):
 		provider="openrouter",
 		model="x-ai/grok-4.1-fast",
 		fallback_models=("openrouter:qwen/qwen3-coder",),
-		timeout_seconds=120,
 	)
 	cfg = replace(cfg, agent_role=role, openrouter_api_key="test-key")
 	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)
@@ -436,7 +435,6 @@ def test_run_with_fallback_succeeds_on_primary(tmp_path, monkeypatch):
 		provider="openrouter",
 		model="x-ai/grok-4.1-fast",
 		fallback_models=("openrouter:qwen/qwen3-coder",),
-		timeout_seconds=120,
 	)
 	cfg = replace(cfg, agent_role=role, openrouter_api_key="test-key")
 	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)
@@ -468,7 +466,6 @@ def test_run_with_fallback_switches_on_quota_error(tmp_path, monkeypatch):
 		provider="openrouter",
 		model="x-ai/grok-4.1-fast",
 		fallback_models=("openrouter:qwen/qwen3-coder",),
-		timeout_seconds=120,
 	)
 	cfg = replace(cfg, agent_role=role, openrouter_api_key="test-key")
 	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)

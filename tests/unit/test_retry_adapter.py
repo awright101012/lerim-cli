@@ -277,6 +277,116 @@ class TestRetryAdapterInjectsErrorFeedback:
 		assert "error #2" in captured_inputs_list[2]["error_message"]
 
 
+class TestFieldNameNormalization:
+	"""Normalization fixes known field-name mismatches without a retry LLM call."""
+
+	def test_tool_args_normalized_to_next_tool_args(self):
+		"""<tool_args> is rewritten to <next_tool_args> and parsed successfully."""
+		from lerim.agents.retry_adapter import _normalize_xml_field_names
+
+		text = "<next_thought>think</next_thought>\n<next_tool_name>scan</next_tool_name>\n<tool_args>{}</tool_args>"
+		output_fields = {"next_thought", "next_tool_name", "next_tool_args"}
+		result = _normalize_xml_field_names(text, output_fields)
+		assert "<next_tool_args>{}</next_tool_args>" in result
+		assert "<tool_args>" not in result
+
+	def test_tool_name_normalized_to_next_tool_name(self):
+		"""<tool_name> is rewritten to <next_tool_name>."""
+		from lerim.agents.retry_adapter import _normalize_xml_field_names
+
+		text = "<next_thought>think</next_thought>\n<tool_name>scan</tool_name>\n<next_tool_args>{}</next_tool_args>"
+		output_fields = {"next_thought", "next_tool_name", "next_tool_args"}
+		result = _normalize_xml_field_names(text, output_fields)
+		assert "<next_tool_name>scan</next_tool_name>" in result
+
+	def test_numbered_tags_from_trajectory_contamination(self):
+		"""<tool_name_1> is normalized to <next_tool_name> (first match only)."""
+		from lerim.agents.retry_adapter import _normalize_xml_field_names
+
+		text = (
+			"<next_thought>think</next_thought>\n"
+			"<tool_name_1>grep</tool_name_1>\n"
+			"<tool_args_1>{\"pattern\": \"x\"}</tool_args_1>\n"
+			"<tool_name_2>read</tool_name_2>\n"
+			"<tool_args_2>{\"filename\": \"y\"}</tool_args_2>"
+		)
+		output_fields = {"next_thought", "next_tool_name", "next_tool_args"}
+		result = _normalize_xml_field_names(text, output_fields)
+		# First numbered match becomes canonical
+		assert "<next_tool_name>grep</next_tool_name>" in result
+		assert "<next_tool_args>{\"pattern\": \"x\"}</next_tool_args>" in result
+		# Second numbered pair is left as-is (ignored by parser)
+		assert "<tool_name_2>" in result
+
+	def test_no_clobbering_when_alias_is_expected_field(self):
+		"""If 'tool_name' is a real output field, normalization is skipped."""
+		from lerim.agents.retry_adapter import _normalize_xml_field_names
+
+		text = "<tool_name>scan</tool_name>"
+		output_fields = {"tool_name"}  # alias is the real field name
+		result = _normalize_xml_field_names(text, output_fields)
+		assert result == text  # unchanged
+
+	def test_normalization_avoids_retry_llm_call(self):
+		"""When normalization fixes the response, no retry LLM call is made."""
+		from lerim.agents.retry_adapter import RetryAdapter
+
+		# Build a ReAct-style signature with the fields that normalization targets
+		react_sig = (
+			dspy.Signature({}, "")
+			.append("next_thought", dspy.OutputField(), type_=str)
+			.append("next_tool_name", dspy.OutputField(), type_=str)
+			.append("next_tool_args", dspy.OutputField(), type_=str)
+		)
+
+		bad_xml = (
+			"<next_thought>think</next_thought>\n"
+			"<next_tool_name>scan</next_tool_name>\n"
+			"<tool_args>{}</tool_args>"
+		)
+		error = AdapterParseError(
+			adapter_name="XMLAdapter",
+			signature=react_sig,
+			lm_response=bad_xml,
+		)
+
+		call_count = 0
+
+		def call_side_effect(lm, lm_kwargs, signature, demos, inputs):
+			nonlocal call_count
+			call_count += 1
+			raise error
+
+		main_adapter = MagicMock(side_effect=call_side_effect)
+		# parse() succeeds on normalized text
+		main_adapter.parse = MagicMock(return_value={
+			"next_thought": "think",
+			"next_tool_name": "scan",
+			"next_tool_args": "{}",
+		})
+
+		adapter = RetryAdapter(main_adapter, max_retries=2)
+		result = adapter(
+			lm=MagicMock(),
+			lm_kwargs={},
+			signature=react_sig,
+			demos=[],
+			inputs={},
+		)
+
+		assert result == [{
+			"next_thought": "think",
+			"next_tool_name": "scan",
+			"next_tool_args": "{}",
+		}]
+		# Only 1 LLM call (initial), no retry calls
+		assert call_count == 1
+		# parse() was called with normalized text containing <next_tool_args>
+		main_adapter.parse.assert_called_once()
+		call_args = main_adapter.parse.call_args
+		assert "<next_tool_args>" in call_args[0][1]
+
+
 class TestRetryAdapterDelegation:
 	"""__getattr__ delegates to main adapter."""
 

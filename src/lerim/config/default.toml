@@ -1,13 +1,9 @@
 # Lerim default configuration — shipped with the package.
-# Override in ~/.lerim/config.toml (user) or <repo>/.lerim/config.toml (project).
-# API keys come from environment variables only.
+# Override in ~/.lerim/config.toml (user)
+# API keys come from environment variables only in ~/.lerim/.env
 
 [data]
 dir = "~/.lerim"
-
-[memory]
-scope = "project_fallback_global"   # project_fallback_global | project_only | global_only
-project_dir_name = ".lerim"
 
 [server]
 host = "127.0.0.1"
@@ -16,19 +12,16 @@ sync_interval_minutes = 30          # sync hot path interval
 maintain_interval_minutes = 60       # maintain cold path interval
 sync_window_days = 7
 sync_max_sessions = 50
-parallel_pipelines = true               # run extract pipelines in parallel (set false for local/Ollama models)
 
 [roles.agent]
-provider = "opencode_go"               # opencode_go | minimax | zai | openrouter | openai | ollama
-model = "minimax-m2.5"                 # OpenCode Go models: minimax-m2.7, minimax-m2.5, kimi-k2.5, glm-5
+provider = "minimax"               # opencode_go | minimax | zai | openrouter | openai | ollama
+model = "MiniMax-M2.5"                 # OpenCode Go models: minimax-m2.7, minimax-m2.5, kimi-k2.5, glm-5
 api_base = ""
 # Model names are auto-normalized per provider (e.g. minimax-m2.5 → MiniMax-M2.5 for minimax provider).
-fallback_models = ["minimax:MiniMax-M2.5"]  # auto-switch on quota/rate-limit errors
-timeout_seconds = 600
-max_iterations = 30
-max_iters_sync = 15                    # max ReAct iterations for agent role in sync flow
-max_iters_maintain = 30                # max ReAct iterations for agent role in maintain flow
-max_iters_ask = 30                     # max ReAct iterations for agent role in ask flow
+fallback_models = ["zai:glm-4.7"]  # auto-switch on quota/rate-limit errors
+max_iters_sync = 30                    # max ReAct iterations for agent role in sync flow
+max_iters_maintain = 50                # max ReAct iterations for agent role in maintain flow
+max_iters_ask = 15                     # max ReAct iterations for agent role in ask flow
 openrouter_provider_order = []
 thinking = true
 max_tokens = 32000
@@ -44,7 +37,6 @@ openrouter = "https://openrouter.ai/api/v1"
 opencode_go = "https://opencode.ai/zen/go/v1"
 ollama = "http://127.0.0.1:11434"
 # Docker: use "http://host.docker.internal:11434" if Ollama runs on the host.
-litellm_proxy = "http://127.0.0.1:4000"
 mlx = "http://127.0.0.1:8000/v1"
 auto_unload = true                     # unload Ollama models after each sync/maintain cycle to free RAM
 
@@ -62,25 +54,3 @@ endpoint = "https://api.lerim.dev"
 [projects]
 # Map project short names to absolute host paths.
 # my-project = "~/codes/my-project"
-
-# --- Planned features (uncomment when implemented) ---
-# [embeddings]
-# provider = "local"
-# model = "Alibaba-NLP/gte-modernbert-base"
-# chunk_tokens = 800
-# chunk_overlap_tokens = 200
-# max_input_tokens = 8192
-
-# [search]
-# mode = "files"                       # files | fts | hybrid
-# enable_fts = false
-# enable_vectors = false
-# enable_graph = true
-# graph_depth = 1
-# graph_export = false
-
-# [paths]
-# claude_dir = "~/.claude/projects"
-# codex_dir = "~/.codex/sessions"
-# opencode_dir = "~/.local/share/opencode"
-# cursor_dir = "~/Library/Application Support/Cursor/User/globalStorage"

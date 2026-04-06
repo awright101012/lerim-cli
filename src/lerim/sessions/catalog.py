@@ -1040,7 +1040,7 @@ if __name__ == "__main__":
         with tempfile.TemporaryDirectory(prefix="lerim-catalog-selftest-") as tmp:
             cfg_path = Path(tmp) / "test_config.toml"
             cfg_path.write_text(
-                f'[data]\ndir = "{tmp}"\n\n[memory]\nscope = "global_only"\n',
+                f'[data]\ndir = "{tmp}"\n',
                 encoding="utf-8",
             )
             os.environ["LERIM_CONFIG"] = str(cfg_path)

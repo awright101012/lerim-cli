@@ -20,7 +20,7 @@ from lerim.config.providers import build_dspy_lm
 from lerim.config.settings import get_config
 
 TRACES_DIR = Path(__file__).parent.parent / "fixtures" / "traces"
-TRACE_PATH = TRACES_DIR / "claude_short.jsonl"
+TRACE_PATH = TRACES_DIR / "claude_long_multitopic.jsonl"
 
 
 @pytest.fixture
@@ -58,13 +58,13 @@ def _memory_files(memory_root: Path) -> list[Path]:
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(240)
 def test_extract_runs_and_produces_memory(memory_root, lead_lm):
 	"""ExtractAgent creates at least one memory file from a short trace."""
 	agent = ExtractAgent(
 		memory_root=memory_root,
 		trace_path=TRACE_PATH,
-		max_iters=10,
+		max_iters=15,
 	)
 	with dspy.context(lm=lead_lm):
 		prediction = agent.forward()
@@ -75,13 +75,13 @@ def test_extract_runs_and_produces_memory(memory_root, lead_lm):
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(240)
 def test_extract_produces_valid_frontmatter(memory_root, lead_lm):
 	"""Extracted memory files have valid 3-field frontmatter."""
 	agent = ExtractAgent(
 		memory_root=memory_root,
 		trace_path=TRACE_PATH,
-		max_iters=10,
+		max_iters=15,
 	)
 	with dspy.context(lm=lead_lm):
 		agent.forward()
@@ -100,13 +100,13 @@ def test_extract_produces_valid_frontmatter(memory_root, lead_lm):
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(240)
 def test_extract_writes_summary(memory_root, lead_lm):
 	"""ExtractAgent writes at least one summary to summaries/."""
 	agent = ExtractAgent(
 		memory_root=memory_root,
 		trace_path=TRACE_PATH,
-		max_iters=10,
+		max_iters=20,
 	)
 	with dspy.context(lm=lead_lm):
 		agent.forward()
@@ -117,13 +117,13 @@ def test_extract_writes_summary(memory_root, lead_lm):
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(240)
 def test_extract_updates_index(memory_root, lead_lm):
 	"""ExtractAgent updates index.md beyond the initial stub."""
 	agent = ExtractAgent(
 		memory_root=memory_root,
 		trace_path=TRACE_PATH,
-		max_iters=10,
+		max_iters=15,
 	)
 	with dspy.context(lm=lead_lm):
 		agent.forward()
@@ -140,7 +140,7 @@ def test_extract_updates_index(memory_root, lead_lm):
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(240)
 def test_maintain_runs_on_seeded_store(seeded_memory_root, lead_lm):
 	"""MaintainAgent completes on a seeded memory store without crashing."""
 	agent = MaintainAgent(

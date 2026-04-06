@@ -471,7 +471,7 @@ def _list_memory_files_dashboard() -> list[Path]:
     for _name, project_path in config.projects.items():
         mem_dirs.append(
             Path(project_path).expanduser().resolve()
-            / config.memory_project_dir_name
+            / ".lerim"
             / "memory"
         )
 
@@ -877,13 +877,10 @@ def _serialize_full_config(config: Config) -> dict[str, Any]:
             "provider": role.provider,
             "model": role.model,
             "api_base": getattr(role, "api_base", ""),
-            "timeout_seconds": role.timeout_seconds,
             "openrouter_provider_order": list(
                 getattr(role, "openrouter_provider_order", ())
             ),
         }
-        if hasattr(role, "max_iterations"):
-            base["max_iterations"] = role.max_iterations
         if hasattr(role, "fallback_models"):
             base["fallback_models"] = list(role.fallback_models)
         if hasattr(role, "max_window_tokens"):
@@ -902,7 +899,6 @@ def _serialize_full_config(config: Config) -> dict[str, Any]:
             "sync_max_sessions": config.sync_max_sessions,
         },
         "memory": {
-            "scope": config.memory_scope,
             "dir": str(config.memory_dir),
         },
         "roles": {

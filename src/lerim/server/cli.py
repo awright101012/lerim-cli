@@ -274,8 +274,6 @@ def _cmd_memory_reset(args: argparse.Namespace) -> int:
         return 2
     config = get_config()
     resolved = resolve_data_dirs(
-        scope=config.memory_scope,
-        project_dir_name=config.memory_project_dir_name,
         global_data_dir=config.global_data_dir or config.data_dir,
         repo_path=Path.cwd(),
     )

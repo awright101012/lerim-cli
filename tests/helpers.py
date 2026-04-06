@@ -20,8 +20,6 @@ def make_config(base: Path) -> Config:
         index_dir=base / "index",
         sessions_db_path=base / "index" / "sessions.sqlite3",
         platforms_path=base / "platforms.json",
-        memory_scope="global_only",
-        memory_project_dir_name=".lerim",
         server_host="127.0.0.1",
         server_port=8765,
         sync_interval_minutes=5,
@@ -29,11 +27,9 @@ def make_config(base: Path) -> Config:
         agent_role=RoleConfig(
             provider="openrouter",
             model="x-ai/grok-4.1-fast",
-            timeout_seconds=300,
         ),
         sync_window_days=7,
         sync_max_sessions=50,
-        parallel_pipelines=True,
         mlflow_enabled=False,
         anthropic_api_key=None,
         openai_api_key=None,
@@ -66,7 +62,6 @@ def write_test_config(tmp_path: Path, **sections: dict[str, Any]) -> Path:
     """
     all_sections: dict[str, dict[str, Any]] = {
         "data": {"dir": str(tmp_path)},
-        "memory": {"scope": "global_only"},
     }
 
     legacy_agent = sections.pop("agent", None)
@@ -76,9 +71,6 @@ def write_test_config(tmp_path: Path, **sections: dict[str, Any]) -> Path:
             lead["provider"] = legacy_agent["provider"]
         if "model" in legacy_agent:
             lead["model"] = legacy_agent["model"]
-        if "timeout" in legacy_agent:
-            lead["timeout_seconds"] = legacy_agent["timeout"]
-
     for name, payload in sections.items():
         if isinstance(payload, dict):
             all_sections[name] = payload
