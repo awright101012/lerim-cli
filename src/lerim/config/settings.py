@@ -42,6 +42,7 @@ class RoleConfig:
 	fallback_models: tuple[str, ...] = ()
 	openrouter_provider_order: tuple[str, ...] = ()
 	thinking: bool = True
+	temperature: float = 1.0
 	max_tokens: int = 32000
 	# Agent-specific
 	max_iters_sync: int = 15
@@ -273,6 +274,7 @@ def _build_role(
 		fallback_models=_to_fallback_models(raw.get("fallback_models")),
 		openrouter_provider_order=_to_string_tuple(raw.get("openrouter_provider_order")),
 		thinking=bool(raw.get("thinking", True)),
+		temperature=float(raw.get("temperature", 1.0)),
 		max_tokens=int(raw.get("max_tokens", 32000)),
 		max_iters_sync=int(raw.get("max_iters_sync", 15)),
 		max_iters_maintain=int(raw.get("max_iters_maintain", 30)),

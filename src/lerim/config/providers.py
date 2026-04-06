@@ -152,6 +152,7 @@ def _build_dspy_lm_for_provider(
 	role_label: str,
 	openrouter_provider_order: tuple[str, ...] = (),
 	thinking: bool = True,
+	temperature: float = 1.0,
 	max_tokens: int = 32000,
 ) -> dspy.LM:
 	"""Build a single DSPy LM object from provider/model/api_base."""
@@ -159,6 +160,7 @@ def _build_dspy_lm_for_provider(
 		kwargs: dict = dict(
 			api_key="ollama",
 			api_base=api_base or _default_api_base("ollama"),
+			temperature=temperature,
 			cache=False,
 			max_tokens=max_tokens,
 		)
@@ -170,6 +172,7 @@ def _build_dspy_lm_for_provider(
 			f"openai/{model}",
 			api_key="mlx",
 			api_base=api_base or _default_api_base("mlx"),
+			temperature=temperature,
 			cache=False,
 			max_tokens=max_tokens,
 		)
@@ -186,6 +189,7 @@ def _build_dspy_lm_for_provider(
 			f"openrouter/{model}",
 			api_key=api_key,
 			api_base=api_base or _default_api_base("openrouter"),
+			temperature=temperature,
 			cache=False,
 			max_tokens=max_tokens,
 			extra_body=extra_body,
@@ -195,7 +199,7 @@ def _build_dspy_lm_for_provider(
 		if not api_key:
 			raise RuntimeError(f"missing_api_key:OPENCODE_API_KEY required for {role_label}")
 		base = api_base or _default_api_base("opencode_go")
-		return dspy.LM(f"openai/{model}", api_key=api_key, api_base=base, cache=False, max_tokens=max_tokens)
+		return dspy.LM(f"openai/{model}", api_key=api_key, api_base=base, temperature=temperature, cache=False, max_tokens=max_tokens)
 	if provider in {"zai", "openai", "minimax"}:
 		api_key = _api_key_for_provider(cfg, provider)
 		env_name = {
@@ -209,6 +213,7 @@ def _build_dspy_lm_for_provider(
 			f"openai/{model}",
 			api_key=api_key,
 			api_base=api_base or _default_api_base(provider),
+			temperature=temperature,
 			cache=False,
 			max_tokens=max_tokens,
 		)
@@ -235,6 +240,7 @@ def build_dspy_lm(
 		role_label=f"roles.{role}.provider={role_cfg.provider}",
 		openrouter_provider_order=role_cfg.openrouter_provider_order,
 		thinking=role_cfg.thinking,
+		temperature=role_cfg.temperature,
 		max_tokens=role_cfg.max_tokens,
 	)
 
@@ -256,6 +262,7 @@ def build_dspy_fallback_lms(
 			cfg=cfg,
 			role_label=f"roles.{role}.fallback={spec.provider}:{spec.model}",
 			thinking=role_cfg.thinking,
+			temperature=role_cfg.temperature,
 			max_tokens=role_cfg.max_tokens,
 		)
 		for spec in specs
