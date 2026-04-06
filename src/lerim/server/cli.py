@@ -273,34 +273,45 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory_reset(args: argparse.Namespace) -> int:
-    """Reset memory/index trees for project/global roots."""
+    """Reset memory trees for project/global roots.
+
+    Project scope resets per-project memory only.
+    Global scope resets global infrastructure (workspace, index, cache).
+    """
     if not args.yes:
         _emit("Refusing to reset without --yes", file=sys.stderr)
         return 2
     config = get_config()
     resolved = resolve_data_dirs(
-        global_data_dir=config.global_data_dir or config.data_dir,
+        global_data_dir=config.global_data_dir,
         repo_path=Path.cwd(),
     )
-    targets: list[Path] = []
-    selected_scope = str(args.scope or "both")
-    if selected_scope in {"project", "both"} and resolved.project_data_dir:
-        targets.append(resolved.project_data_dir)
-    if selected_scope in {"global", "both"}:
-        targets.append(resolved.global_data_dir)
+    from lerim.memory.repo import reset_global_infrastructure
 
+    selected_scope = str(args.scope or "both")
     seen: set[Path] = set()
     summaries: list[dict[str, Any]] = []
-    for data_root in targets:
-        root = data_root.resolve()
-        if root in seen:
-            continue
-        seen.add(root)
-        layout = build_memory_paths(root)
-        result = reset_memory_root(layout)
-        summaries.append(
-            {"data_dir": str(root), "removed": result.get("removed") or []}
-        )
+
+    # Project scope: reset per-project memory (knowledge)
+    if selected_scope in {"project", "both"} and resolved.project_data_dir:
+        root = resolved.project_data_dir.resolve()
+        if root not in seen:
+            seen.add(root)
+            layout = build_memory_paths(root)
+            result = reset_memory_root(layout)
+            summaries.append(
+                {"data_dir": str(root), "removed": result.get("removed") or []}
+            )
+
+    # Global scope: reset infrastructure (workspace, index, cache)
+    if selected_scope in {"global", "both"}:
+        root = resolved.global_data_dir.resolve()
+        if root not in seen:
+            seen.add(root)
+            result = reset_global_infrastructure(root)
+            summaries.append(
+                {"data_dir": str(root), "removed": result.get("removed") or []}
+            )
 
     if args.json:
         _emit(json.dumps({"reset": summaries}, indent=2, ensure_ascii=True))

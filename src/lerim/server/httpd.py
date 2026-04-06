@@ -460,20 +460,23 @@ def _load_messages_for_run(run_doc: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _list_memory_files_dashboard() -> list[Path]:
-    """List all markdown files across global + all registered project memory dirs."""
+    """List all markdown files across registered project memory dirs.
+
+    Memory lives per-project only (<project>/.lerim/memory/).
+    Global ~/.lerim/ has no memory dir — it holds infrastructure only.
+    """
     config = get_config()
 
-    # Collect candidate memory root dirs: primary, global, and all registered projects.
-    mem_dirs: list[Path] = [
-        config.memory_dir,
-        config.global_data_dir / "memory",
-    ]
+    # Collect per-project memory dirs (the only source of knowledge).
+    mem_dirs: list[Path] = []
     for _name, project_path in config.projects.items():
         mem_dirs.append(
             Path(project_path).expanduser().resolve()
             / ".lerim"
             / "memory"
         )
+    # Also include config.memory_dir in case CWD is in an unregistered project.
+    mem_dirs.append(config.memory_dir)
 
     # Deduplicate by resolved path, then collect .md files from each (flat layout).
     seen: set[Path] = set()
@@ -623,7 +626,7 @@ def _load_memory_graph_edges(
 ) -> list[tuple[str, str, str, float]]:
     """Load explicit memory graph edges from optional graph SQLite index."""
     config = get_config()
-    graph_path = config.index_dir / "graph.sqlite3"
+    graph_path = config.global_data_dir / "index" / "graph.sqlite3"
     if not graph_path.exists():
         return []
     try:

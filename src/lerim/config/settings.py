@@ -348,16 +348,31 @@ def load_config() -> Config:
         global_data_dir=global_data_dir,
         repo_path=Path.cwd(),
     )
-    primary = scope.ordered_data_dirs[0] if scope.ordered_data_dirs else global_data_dir
 
-    memory_dir = primary / "memory"
-    index_dir = primary / "index"
+    # Infrastructure (workspace, index, locks) always in global dir.
+    # Per-project .lerim/ contains only memory/ (knowledge).
+    index_dir = global_data_dir / "index"
+
+    # Memory dir: project-level if inside a registered project, else global.
+    memory_dir = (
+        (scope.project_data_dir / "memory")
+        if scope.project_data_dir
+        else (global_data_dir / "memory")
+    )
 
     # Lazy import: structural circular dependency (settings -> memory_repo -> memory_record -> settings)
-    from lerim.memory.repo import build_memory_paths, ensure_memory_paths
+    from lerim.memory.repo import (
+        build_memory_paths,
+        ensure_global_infrastructure,
+        ensure_project_memory,
+    )
 
+    # Global infrastructure: workspace, index, cache, logs
+    ensure_global_infrastructure(global_data_dir)
+
+    # Per-project memory dirs (knowledge only, no workspace/index)
     for data_root in scope.ordered_data_dirs:
-        ensure_memory_paths(build_memory_paths(data_root))
+        ensure_project_memory(build_memory_paths(data_root))
 
     agent_role = _build_agent_role(roles)
 
@@ -387,7 +402,7 @@ def load_config() -> Config:
     )
 
     return Config(
-        data_dir=primary,
+        data_dir=global_data_dir,
         global_data_dir=global_data_dir,
         memory_dir=memory_dir,
         index_dir=index_dir,

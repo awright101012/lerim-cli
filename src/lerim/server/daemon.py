@@ -117,8 +117,12 @@ WRITER_LOCK_NAME = "writer.lock"
 
 
 def lock_path(name: str) -> Path:
-    """Return lock file path under configured index directory."""
-    return get_config().index_dir / name
+    """Return lock file path under global index directory.
+
+    Lock files must be co-located with the sessions DB they protect,
+    always in ~/.lerim/index/ regardless of CWD.
+    """
+    return get_config().global_data_dir / "index" / name
 
 
 def _parse_iso(raw: str | None) -> datetime | None:

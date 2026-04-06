@@ -64,14 +64,18 @@ def _resolve_runtime_roots(
 	memory_root: str | Path | None,
 	workspace_root: str | Path | None,
 ) -> tuple[Path, Path]:
-	"""Resolve memory/workspace roots using config defaults when unset."""
+	"""Resolve memory/workspace roots using config defaults when unset.
+
+	Workspace always resolves to the global data dir (~/.lerim/workspace).
+	Memory root is per-project when passed by daemon, else falls back to config.
+	"""
 	resolved_memory_root = (
 		Path(memory_root).expanduser().resolve() if memory_root else config.memory_dir
 	)
 	resolved_workspace_root = (
 		Path(workspace_root).expanduser().resolve()
 		if workspace_root
-		else (config.data_dir / "workspace")
+		else (config.global_data_dir / "workspace")
 	)
 	return resolved_memory_root, resolved_workspace_root
 

@@ -131,11 +131,17 @@ def test_memory_reset_recreates_project_and_global_roots(
 ) -> None:
     project_root = tmp_path / "project-data"
     global_root = tmp_path / "global-data"
-    for root in (project_root, global_root):
-        (root / "memory").mkdir(parents=True, exist_ok=True)
-        (root / "memory" / "seed.md").write_text("seed", encoding="utf-8")
-        (root / "index").mkdir(parents=True, exist_ok=True)
-        (root / "index" / "fts.sqlite3").write_text("", encoding="utf-8")
+
+    # Project: memory (knowledge)
+    (project_root / "memory").mkdir(parents=True, exist_ok=True)
+    (project_root / "memory" / "seed.md").write_text("seed", encoding="utf-8")
+
+    # Global: infrastructure (workspace, index, cache)
+    (global_root / "workspace").mkdir(parents=True, exist_ok=True)
+    (global_root / "workspace" / "sync-run").mkdir()
+    (global_root / "index").mkdir(parents=True, exist_ok=True)
+    (global_root / "index" / "fts.sqlite3").write_text("", encoding="utf-8")
+    (global_root / "cache").mkdir(parents=True, exist_ok=True)
 
     base_cfg = make_config(global_root)
     cfg = replace(base_cfg, data_dir=global_root, global_data_dir=global_root)
@@ -157,10 +163,13 @@ def test_memory_reset_recreates_project_and_global_roots(
     )
     assert code == 0
     assert len(payload["reset"]) == 2
+    # Project: memory cleared and recreated
     assert (project_root / "memory").exists()
-    assert (global_root / "memory").exists()
     assert not (project_root / "memory" / "seed.md").exists()
-    assert not (global_root / "memory" / "seed.md").exists()
+    # Global: infrastructure cleared and recreated
+    assert (global_root / "workspace").exists()
+    assert (global_root / "index").exists()
+    assert not (global_root / "index" / "fts.sqlite3").exists()
 
 
 def test_json_flag_hoisting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

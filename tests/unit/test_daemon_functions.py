@@ -757,14 +757,14 @@ def test_record_service_event_calls_fn() -> None:
 
 
 def test_lock_path_uses_index_dir(monkeypatch, tmp_path) -> None:
-	"""lock_path returns path under config.index_dir."""
+	"""lock_path returns path under global_data_dir / index."""
 	from lerim.server.daemon import lock_path
 
 	cfg = make_config(tmp_path)
 	monkeypatch.setattr("lerim.server.daemon.get_config", lambda: cfg)
 
 	result = lock_path("writer.lock")
-	assert result == cfg.index_dir / "writer.lock"
+	assert result == cfg.global_data_dir / "index" / "writer.lock"
 
 
 # ---------------------------------------------------------------------------

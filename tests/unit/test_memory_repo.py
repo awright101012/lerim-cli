@@ -1,7 +1,7 @@
 """Unit tests for memory_repo.py filesystem path helpers.
 
-Tests: build_memory_paths, ensure_memory_paths, reset_memory_root,
-and MemoryPaths dataclass field correctness.
+Tests: build_memory_paths, ensure_project_memory, ensure_global_infrastructure,
+reset_memory_root, reset_global_infrastructure, and MemoryPaths dataclass field correctness.
 """
 
 from __future__ import annotations
@@ -10,7 +10,9 @@ from pathlib import Path
 
 from lerim.memory.repo import (
 	build_memory_paths,
-	ensure_memory_paths,
+	ensure_global_infrastructure,
+	ensure_project_memory,
+	reset_global_infrastructure,
 	reset_memory_root,
 )
 
@@ -25,8 +27,6 @@ def test_build_memory_paths_structure(tmp_path):
 	paths = build_memory_paths(tmp_path)
 	assert paths.data_dir == tmp_path
 	assert paths.memory_dir == tmp_path / "memory"
-	assert paths.workspace_dir == tmp_path / "workspace"
-	assert paths.index_dir == tmp_path / "index"
 
 
 def test_build_memory_paths_expands_user():
@@ -47,39 +47,40 @@ def test_memory_paths_is_frozen(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# ensure_memory_paths
+# ensure_project_memory
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_memory_paths_creates_dirs(tmp_path):
-	"""ensure_memory_paths creates all canonical subdirectories."""
+def test_ensure_project_memory_creates_dirs(tmp_path):
+	"""ensure_project_memory creates memory subdirectories only."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 
 	assert paths.memory_dir.is_dir()
 	assert (paths.memory_dir / "summaries").is_dir()
 	assert (paths.memory_dir / "archived").is_dir()
-	assert paths.workspace_dir.is_dir()
-	assert paths.index_dir.is_dir()
+	# workspace and index are NOT created by ensure_project_memory
+	assert not (tmp_path / "workspace").exists()
+	assert not (tmp_path / "index").exists()
 
 
-def test_ensure_memory_paths_idempotent(tmp_path):
-	"""Calling ensure_memory_paths twice does not raise."""
+def test_ensure_project_memory_idempotent(tmp_path):
+	"""Calling ensure_project_memory twice does not raise."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
+	ensure_project_memory(paths)
 	assert paths.memory_dir.is_dir()
 
 
-def test_ensure_memory_paths_preserves_existing_files(tmp_path):
-	"""ensure_memory_paths does not delete existing files."""
+def test_ensure_project_memory_preserves_existing_files(tmp_path):
+	"""ensure_project_memory does not delete existing files."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 
 	test_file = paths.memory_dir / "test.md"
 	test_file.write_text("keep me", encoding="utf-8")
 
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 	assert test_file.read_text(encoding="utf-8") == "keep me"
 
 
@@ -89,9 +90,9 @@ def test_ensure_memory_paths_preserves_existing_files(tmp_path):
 
 
 def test_reset_removes_and_recreates(tmp_path):
-	"""reset_memory_root clears memory/workspace/index and recreates structure."""
+	"""reset_memory_root clears memory and recreates structure."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 
 	# Create a file that should be removed
 	sentinel = paths.memory_dir / "20260228-test.md"
@@ -109,20 +110,18 @@ def test_reset_removes_and_recreates(tmp_path):
 def test_reset_reports_removed_dirs(tmp_path):
 	"""reset_memory_root reports which directories were removed."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 
 	result = reset_memory_root(paths)
 	removed = result["removed"]
 
 	assert str(paths.memory_dir) in removed
-	assert str(paths.workspace_dir) in removed
-	assert str(paths.index_dir) in removed
 
 
 def test_reset_on_empty_root(tmp_path):
 	"""reset_memory_root works even when no directories exist yet."""
 	paths = build_memory_paths(tmp_path)
-	# Don't call ensure_memory_paths -- dirs don't exist
+	# Don't call ensure_project_memory -- dirs don't exist
 	result = reset_memory_root(paths)
 
 	# Should still create the structure
@@ -131,9 +130,9 @@ def test_reset_on_empty_root(tmp_path):
 
 
 def test_reset_then_ensure_consistent(tmp_path):
-	"""After reset, ensure_memory_paths produces same layout."""
+	"""After reset, ensure_project_memory produces same layout."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 
 	reset_memory_root(paths)
 
@@ -141,25 +140,6 @@ def test_reset_then_ensure_consistent(tmp_path):
 	assert paths.memory_dir.is_dir()
 	assert (paths.memory_dir / "summaries").is_dir()
 	assert (paths.memory_dir / "archived").is_dir()
-	assert paths.workspace_dir.is_dir()
-	assert paths.index_dir.is_dir()
-
-
-def test_reset_removes_cache_dir(tmp_path):
-	"""reset_memory_root also removes the cache directory."""
-	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
-
-	cache_dir = paths.data_dir / "cache"
-	cache_dir.mkdir(parents=True)
-	cache_file = cache_dir / "session.jsonl"
-	cache_file.write_text('{"x":1}\n', encoding="utf-8")
-	assert cache_file.exists()
-
-	result = reset_memory_root(paths)
-
-	assert not cache_file.exists()
-	assert str(cache_dir) in result["removed"]
 
 
 def test_reset_handles_file_instead_of_dir(tmp_path):
@@ -181,7 +161,7 @@ def test_reset_handles_file_instead_of_dir(tmp_path):
 def test_reset_creates_summaries_and_archived(tmp_path):
 	"""reset_memory_root recreates summaries and archived subdirs after clearing."""
 	paths = build_memory_paths(tmp_path)
-	ensure_memory_paths(paths)
+	ensure_project_memory(paths)
 
 	# Put content in summaries
 	summary_file = paths.memory_dir / "summaries" / "test.md"
@@ -192,3 +172,40 @@ def test_reset_creates_summaries_and_archived(tmp_path):
 	assert (paths.memory_dir / "summaries").is_dir()
 	assert (paths.memory_dir / "archived").is_dir()
 	assert not summary_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# ensure_global_infrastructure / reset_global_infrastructure
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_global_infrastructure_creates_dirs(tmp_path):
+	"""ensure_global_infrastructure creates workspace, index, cache, and logs."""
+	ensure_global_infrastructure(tmp_path)
+
+	assert (tmp_path / "workspace").is_dir()
+	assert (tmp_path / "index").is_dir()
+	assert (tmp_path / "cache").is_dir()
+	assert (tmp_path / "logs").is_dir()
+
+
+def test_reset_global_infrastructure(tmp_path):
+	"""reset_global_infrastructure removes workspace/index/cache and recreates."""
+	ensure_global_infrastructure(tmp_path)
+
+	# Place sentinel files
+	sentinel = tmp_path / "index" / "fts.sqlite3"
+	sentinel.write_text("stale", encoding="utf-8")
+	assert sentinel.exists()
+
+	result = reset_global_infrastructure(tmp_path)
+
+	# Sentinel gone, but dirs recreated
+	assert not sentinel.exists()
+	assert (tmp_path / "workspace").is_dir()
+	assert (tmp_path / "index").is_dir()
+	assert (tmp_path / "cache").is_dir()
+	assert (tmp_path / "logs").is_dir()
+	assert str(tmp_path / "workspace") in result["removed"]
+	assert str(tmp_path / "index") in result["removed"]
+	assert str(tmp_path / "cache") in result["removed"]
