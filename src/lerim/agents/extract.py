@@ -11,6 +11,7 @@ from pathlib import Path
 
 import dspy
 
+from lerim.agents.lerim_react import LerimReact
 from lerim.agents.tools import MemoryTools
 
 
@@ -123,7 +124,19 @@ class ExtractAgent(dspy.Module):
 			trace_path=trace_path,
 			run_folder=run_folder,
 		)
-		self.react = dspy.ReAct(
+		# self.react = dspy.ReAct(
+		# 	ExtractSignature,
+		# 	tools=[
+		# 		self.tools.read,
+		# 		self.tools.grep,
+		# 		self.tools.scan,
+		# 		self.tools.write,
+		# 		self.tools.edit,
+		# 		self.tools.verify_index,
+		# 	],
+		# 	max_iters=max_iters,
+		# )
+		self.react = LerimReact(
 			ExtractSignature,
 			tools=[
 				self.tools.read,
