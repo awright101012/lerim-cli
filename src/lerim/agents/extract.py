@@ -71,10 +71,12 @@ class ExtractSignature(dspy.Signature):
 	</extraction_criteria>
 
 	<steps>
-	<step name="orient">Call scan() to see existing memories. Call read("index.md")
-	for current organization. Call read("trace", limit=200) to start reading.
-	If large, page with offset/limit. Use grep("trace", "remember") for
-	explicit user requests.</step>
+	<step name="orient">You MUST start by calling scan() to see existing memories,
+	then read("index.md") for current organization, then read("trace", limit=200)
+	to start reading the session. Do not skip this orientation phase. Do not
+	respond with empty tool calls — always pick a tool to call.
+	If the trace is large, page with offset/limit. Use grep("trace", "remember")
+	for explicit user requests.</step>
 
 	<step name="analyze">Identify extractable items from the trace using the
 	extraction criteria above. Note which type each item belongs to.</step>

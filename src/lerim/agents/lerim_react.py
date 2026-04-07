@@ -78,7 +78,8 @@ class LerimReact(Module):
 			[
 				f"You are an Agent. In each episode, you will be given the fields {inputs} as input. And you can see your past trajectory so far.",
 				f"Your goal is to use one or more of the supplied tools to collect any necessary information for producing {outputs}.\n",
-				"At each turn you will call exactly one tool from the `available_tools` list to make progress.",
+				"At each turn you MUST call exactly one tool from the `available_tools` list. Returning an empty tool call is not allowed.",
+				"When you have all the information needed to produce the output fields, you MUST call the `finish` tool to end the loop. Do not stop calling tools without calling `finish` first.",
 				"After each tool call, you receive a resulting observation, which gets appended to your trajectory.\n",
 				"When selecting the next_tool_call, the tool must be one of:\n",
 			]
@@ -134,7 +135,13 @@ class LerimReact(Module):
 				break
 
 			if not pred.next_tool_call or not pred.next_tool_call.tool_calls:
-				logger.warning(f"Ending the trajectory: Agent returned no tool call at iteration {idx}")
+				# Empty tool call → treat as implicit finish so the work done so far
+				# is preserved and we move to the extraction phase. Without this,
+				# any prior tool calls would be lost.
+				logger.info(f"Agent returned no tool call at iteration {idx}, treating as implicit finish")
+				trajectory[f"tool_name_{idx}"] = "finish"
+				trajectory[f"tool_args_{idx}"] = {}
+				trajectory[f"observation_{idx}"] = "Completed (implicit finish)."
 				break
 
 			tool_call = pred.next_tool_call.tool_calls[0]
@@ -172,7 +179,11 @@ class LerimReact(Module):
 				break
 
 			if not pred.next_tool_call or not pred.next_tool_call.tool_calls:
-				logger.warning(f"Ending the trajectory: Agent returned no tool call at iteration {idx}")
+				# Empty tool call → treat as implicit finish (see sync forward).
+				logger.info(f"Agent returned no tool call at iteration {idx}, treating as implicit finish")
+				trajectory[f"tool_name_{idx}"] = "finish"
+				trajectory[f"tool_args_{idx}"] = {}
+				trajectory[f"observation_{idx}"] = "Completed (implicit finish)."
 				break
 
 			tool_call = pred.next_tool_call.tool_calls[0]

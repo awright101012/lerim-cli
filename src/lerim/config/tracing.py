@@ -19,10 +19,16 @@ from loguru import logger
 from lerim.config.settings import Config
 
 
-def configure_tracing(config: Config) -> None:
+def configure_tracing(config: Config, experiment_name: str = "lerim") -> None:
 	"""Activate MLflow DSPy autologging if enabled via LERIM_MLFLOW env var.
 
 	Must be called once at startup before any agent is constructed.
+
+	Args:
+		config: Lerim config (must have mlflow_enabled=True to take effect).
+		experiment_name: MLflow experiment to log into. Use "lerim" for production
+			runs and "lerim-evals" (or any custom name) for evaluation runs so they
+			show up in separate tabs in the MLflow UI.
 	"""
 	if not config.mlflow_enabled:
 		return
@@ -35,9 +41,13 @@ def configure_tracing(config: Config) -> None:
 
 	db_path = config.global_data_dir / "mlflow.db"
 	mlflow.set_tracking_uri(f"sqlite:///{db_path}")
-	mlflow.set_experiment("lerim")
+	mlflow.set_experiment(experiment_name)
 	mlflow.dspy.autolog()
-	logger.info("MLflow tracing enabled (DSPy autolog) → sqlite:///{}", db_path)
+	logger.info(
+		"MLflow tracing enabled (DSPy autolog) → sqlite:///{} experiment={}",
+		db_path,
+		experiment_name,
+	)
 
 
 if __name__ == "__main__":
