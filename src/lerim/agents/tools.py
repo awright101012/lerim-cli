@@ -16,6 +16,12 @@ from pathlib import Path
 
 MEMORY_TYPES = ("user", "feedback", "project", "reference", "summary")
 
+# Hard cap on lines returned per `read("trace", ...)` call. The trace file can
+# be hundreds of KB; reading it all at once blows out the model's context window
+# after a couple of iterations. Forcing chunked reads keeps each observation
+# bounded and matches the agent's per-chunk extraction workflow.
+TRACE_MAX_LINES_PER_READ = 100
+
 
 class MemoryTools:
 	"""Tools for memory extraction, maintenance, and retrieval.
@@ -66,11 +72,17 @@ class MemoryTools:
 		For small files (memories, index.md), call with defaults to read the
 		entire file.
 
+		Note: when reading the session trace, the limit is hard-capped at
+		TRACE_MAX_LINES_PER_READ regardless of what the caller passes. This
+		forces chunked reads so the trajectory stays within the model's
+		context window. The agent must paginate via offset to read more.
+
 		Args:
 			filename: File to read. Use "trace" for the session trace, or a
 				memory filename like "feedback_tabs.md" or "index.md".
 			offset: Line number to start from (0-based). Default 0.
-			limit: Max lines to return. 0 means entire file. Default 0.
+			limit: Max lines to return. 0 means entire file (capped at
+				TRACE_MAX_LINES_PER_READ for trace reads). Default 0.
 		"""
 		path = self._resolve(filename)
 		if path is None:
@@ -84,6 +96,12 @@ class MemoryTools:
 		if not path.is_file():
 			return f"Error: not a file: {filename}"
 
+		is_trace = filename in ("trace", "trace.jsonl")
+		# Enforce trace read cap so agent must paginate.
+		if is_trace:
+			if limit <= 0 or limit > TRACE_MAX_LINES_PER_READ:
+				limit = TRACE_MAX_LINES_PER_READ
+
 		lines = path.read_text(encoding="utf-8").splitlines()
 		total = len(lines)
 
@@ -91,9 +109,11 @@ class MemoryTools:
 			chunk = lines[offset:offset + limit]
 			numbered = [f"{offset + i + 1}\t{line}" for i, line in enumerate(chunk)]
 			header = f"[{total} lines, showing {offset + 1}-{offset + len(chunk)}]"
+			if is_trace and offset + len(chunk) < total:
+				header += f" — {total - (offset + len(chunk))} more lines, call read('trace', offset={offset + len(chunk)}, limit={TRACE_MAX_LINES_PER_READ}) for the next chunk"
 			return header + "\n" + "\n".join(numbered)
 
-		# Full file read
+		# Full file read (non-trace files only)
 		numbered = [f"{i + 1}\t{line}" for i, line in enumerate(lines)]
 		return "\n".join(numbered)
 

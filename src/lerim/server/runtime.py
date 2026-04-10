@@ -279,6 +279,7 @@ class LerimRuntime:
 		trace_path: str | Path,
 		memory_root: str | Path | None = None,
 		workspace_root: str | Path | None = None,
+		adapter: dspy.Adapter | None = None,
 	) -> dict[str, Any]:
 		"""Run memory-write sync flow and return stable contract payload.
 
@@ -288,6 +289,8 @@ class LerimRuntime:
 			trace_path: Path to the session trace JSONL file.
 			memory_root: Override for the memory directory.
 			workspace_root: Override for the workspace directory.
+			adapter: Optional DSPy adapter for the ExtractAgent. Defaults to
+				XMLAdapter when None (set inside ExtractAgent.__init__).
 
 		Returns:
 			Validated SyncResultContract payload dict.
@@ -301,7 +304,7 @@ class LerimRuntime:
 			raise FileNotFoundError(f"trace_path_missing:{trace_file}")
 
 		repo_root = Path(self._default_cwd or Path.cwd()).expanduser().resolve()
-		return self._sync_inner(trace_file, repo_root, memory_root, workspace_root)
+		return self._sync_inner(trace_file, repo_root, memory_root, workspace_root, adapter)
 
 	def _sync_inner(
 		self,
@@ -309,6 +312,7 @@ class LerimRuntime:
 		repo_root: Path,
 		memory_root: str | Path | None,
 		workspace_root: str | Path | None,
+		adapter: dspy.Adapter | None = None,
 	) -> dict[str, Any]:
 		"""Inner sync logic called by sync()."""
 		resolved_memory_root, resolved_workspace_root = _resolve_runtime_roots(
@@ -339,6 +343,7 @@ class LerimRuntime:
 			trace_path=trace_file,
 			run_folder=run_folder,
 			max_iters=self.config.agent_role.max_iters_sync,
+			adapter=adapter,
 		)
 		prediction = self._run_with_fallback(
 			flow="sync",

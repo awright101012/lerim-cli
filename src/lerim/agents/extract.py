@@ -11,7 +11,6 @@ from pathlib import Path
 
 import dspy
 
-from lerim.agents.lerim_react import LerimReact
 from lerim.agents.tools import MemoryTools
 
 
@@ -72,14 +71,33 @@ class ExtractSignature(dspy.Signature):
 
 	<steps>
 	<step name="orient">You MUST start by calling scan() to see existing memories,
-	then read("index.md") for current organization, then read("trace", limit=200)
-	to start reading the session. Do not skip this orientation phase. Do not
-	respond with empty tool calls — always pick a tool to call.
-	If the trace is large, page with offset/limit. Use grep("trace", "remember")
-	for explicit user requests.</step>
+	then read("index.md") for current organization, then read("trace", offset=0, limit=100)
+	to read the FIRST chunk of the session. Do not skip this orientation phase.
+	Do not respond with empty tool calls — always pick a tool to call.
+	Use grep("trace", "remember") for explicit user requests across the whole trace.</step>
 
-	<step name="analyze">Identify extractable items from the trace using the
-	extraction criteria above. Note which type each item belongs to.</step>
+	<step name="chunked_read">CRITICAL: read("trace") is hard-capped at 100 lines per call.
+	You MUST page through the trace by INCREMENTING offset by 100 each call:
+	  read("trace", offset=0,   limit=100)  -> lines 1-100
+	  read("trace", offset=100, limit=100)  -> lines 101-200
+	  read("trace", offset=200, limit=100)  -> lines 201-300
+	  ...continue until the header in the response says "showing X-Y" where Y == total lines.
+
+	HARD RULES:
+	- NEVER call read("trace", offset=0, ...) twice in the same session. Re-reading
+	  the same chunk wastes iterations and produces no new information.
+	- Always look at the previous read's header to know where you are. The header
+	  format is "[N lines, showing A-B]" — your next call MUST use offset=B.
+	- If the previous read header said "showing 1-100", your next read MUST be
+	  offset=100. If it said "showing 101-200", your next read MUST be offset=200.
+	- After you have read every chunk in order, STOP reading and start writing
+	  memories. Then call finish().
+
+	After reading EACH chunk, decide what (if anything) to extract from that chunk
+	and call write() for each memory BEFORE moving to the next chunk.</step>
+
+	<step name="analyze">Identify extractable items from each chunk as you read it,
+	using the extraction criteria above. Note which type each item belongs to.</step>
 
 	<step name="dedup">Compare each candidate against existing memories from scan.
 	Same topic covered? Skip. Related but adds new info? read() then edit().
@@ -119,26 +137,16 @@ class ExtractAgent(dspy.Module):
 	"""DSPy ReAct module for the extract flow. Independently optimizable."""
 
 	def __init__(self, memory_root: Path, trace_path: Path,
-	             run_folder: Path | None = None, max_iters: int = 15):
+	             run_folder: Path | None = None, max_iters: int = 15,
+	             adapter: dspy.Adapter | None = None):
 		super().__init__()
+		self.adapter = adapter or dspy.XMLAdapter()
 		self.tools = MemoryTools(
 			memory_root=memory_root,
 			trace_path=trace_path,
 			run_folder=run_folder,
 		)
-		# self.react = dspy.ReAct(
-		# 	ExtractSignature,
-		# 	tools=[
-		# 		self.tools.read,
-		# 		self.tools.grep,
-		# 		self.tools.scan,
-		# 		self.tools.write,
-		# 		self.tools.edit,
-		# 		self.tools.verify_index,
-		# 	],
-		# 	max_iters=max_iters,
-		# )
-		self.react = LerimReact(
+		self.react = dspy.ReAct(
 			ExtractSignature,
 			tools=[
 				self.tools.read,
@@ -152,8 +160,7 @@ class ExtractAgent(dspy.Module):
 		)
 
 	def forward(self) -> dspy.Prediction:
-		adapter = dspy.ChatAdapter(use_native_function_calling=True)
-		with dspy.context(adapter=adapter):
+		with dspy.context(adapter=self.adapter):
 			return self.react()
 
 

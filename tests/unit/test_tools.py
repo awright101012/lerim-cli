@@ -114,13 +114,17 @@ class TestRead:
 		assert result == ""
 
 	def test_read_negative_limit(self, tools):
-		"""limit=-1 treated as full read (limit <= 0 means no limit)."""
+		"""limit=-1 on trace is capped at TRACE_MAX_LINES_PER_READ (100).
+
+		Trace reads are always chunked to keep the agent's trajectory bounded.
+		Negative or zero limits get replaced with the hard cap.
+		"""
+		from lerim.agents.tools import TRACE_MAX_LINES_PER_READ
+
 		result = tools.read("trace", limit=-1)
-		# Should behave like limit=0: full file, no header
 		assert "1\t" in result
-		assert "100\t" in result
-		# No pagination header
-		assert "[100 lines" not in result
+		# Trace reads always include the pagination header now.
+		assert f"[100 lines, showing 1-{TRACE_MAX_LINES_PER_READ}]" in result
 
 
 # ---------------------------------------------------------------------------
