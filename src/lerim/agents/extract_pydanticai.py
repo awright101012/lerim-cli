@@ -12,19 +12,20 @@ local to this file are:
 - `SYSTEM_PROMPT` — the combined single-pass prompt
 - `ExtractionResult` — the single-pass output type
 - `build_extract_agent` — constructs a PydanticAI Agent with all 6 tools
-- `build_model` — canonical OpenAI-compatible model builder (used by both variants)
+- model construction lives in `lerim.config.providers` — import
+  `build_pydantic_model(role)` for runtime / agent `__main__` use, or
+  `build_pydantic_model_from_provider(provider, model, fallback_models=...)`
+  for eval harness use where provider/model come from an eval TOML
 - `run_extraction` — the single-pass runner matching `run_extraction_three_pass`
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.models import Model
 
 from lerim.agents.tools import (
 	ExtractDeps,
@@ -123,7 +124,7 @@ class ExtractionResult(BaseModel):
 	completion_summary: str = Field(description="Short plain-text completion summary")
 
 
-def build_extract_agent(model: OpenAIChatModel) -> Agent[ExtractDeps, ExtractionResult]:
+def build_extract_agent(model: Model) -> Agent[ExtractDeps, ExtractionResult]:
 	"""Build a PydanticAI agent with the same 6 tools as the three-pass pipeline.
 
 	Uses the shared standalone tool functions from `extract.py` so any benchmark
@@ -140,41 +141,16 @@ def build_extract_agent(model: OpenAIChatModel) -> Agent[ExtractDeps, Extraction
 	)
 
 
-def build_model(provider_name: str = "minimax", model_name: str = "MiniMax-M2.5") -> OpenAIChatModel:
-	"""Build an OpenAI-compatible model for PydanticAI.
-
-	Supports minimax and zai providers via their OpenAI-compatible endpoints.
-	"""
-	configs = {
-		"minimax": {
-			"base_url": "https://api.minimax.io/v1",
-			"env_var": "MINIMAX_API_KEY",
-		},
-		"zai": {
-			"base_url": "https://api.z.ai/api/coding/paas/v4",
-			"env_var": "ZAI_API_KEY",
-		},
-		"ollama": {
-			"base_url": "http://localhost:11434/v1",
-			"env_var": None,
-		},
-	}
-	cfg = configs.get(provider_name)
-	if not cfg:
-		raise ValueError(f"Unknown provider: {provider_name}")
-
-	api_key = "ollama" if provider_name == "ollama" else os.environ.get(cfg["env_var"])
-	if not api_key:
-		raise RuntimeError(f"{cfg['env_var']} required for provider={provider_name}")
-
-	provider = OpenAIProvider(base_url=cfg["base_url"], api_key=api_key)
-	return OpenAIChatModel(model_name, provider=provider)
+# Note: model construction lives in `lerim.config.providers`. This file
+# intentionally does NOT re-export `build_pydantic_model` under a shorter
+# alias — callers must import from the canonical location so the provider /
+# endpoint / fallback chain stays readable from one place.
 
 
 def run_extraction(
 	memory_root: Path,
 	trace_path: Path,
-	model: OpenAIChatModel,
+	model: Model,
 	run_folder: Path | None = None,
 	return_messages: bool = False,
 ):
@@ -183,7 +159,9 @@ def run_extraction(
 	Args:
 		memory_root: Directory containing memory files, index.md, and summaries/.
 		trace_path: Path to the session trace .jsonl file.
-		model: PydanticAI OpenAIChatModel (built by `build_model()`).
+		model: PydanticAI `Model` (built by `lerim.config.providers.build_pydantic_model`
+			or `build_pydantic_model_from_provider`). Typically a `FallbackModel`
+			wrapping a primary with HTTP retry + fallback provider.
 		run_folder: Optional run workspace folder for artifact output.
 		return_messages: If True, return `(ExtractionResult, list[ModelMessage])`.
 			Default False for backward compatibility.
@@ -225,7 +203,8 @@ if __name__ == "__main__":
 		print(f"Memory root: {memory_root}")
 		print()
 
-		model = build_model()
+		from lerim.config.providers import build_pydantic_model
+		model = build_pydantic_model("agent")
 		result = run_extraction(
 			memory_root=memory_root,
 			trace_path=trace_path,

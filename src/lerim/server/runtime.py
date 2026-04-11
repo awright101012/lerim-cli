@@ -30,9 +30,12 @@ from lerim.agents.contracts import (
 )
 from lerim.agents.ask import format_ask_hints
 from lerim.agents.maintain import MaintainAgent
-from lerim.config.providers import build_dspy_fallback_lms, build_dspy_lm
 from lerim.agents.extract import FinalizeResult, run_extraction_three_pass
-from lerim.agents.extract_pydanticai import build_model as build_pydantic_model
+from lerim.config.providers import (
+	build_dspy_fallback_lms,
+	build_dspy_lm,
+	build_pydantic_model,
+)
 
 logger = logging.getLogger("lerim.runtime")
 
@@ -483,29 +486,23 @@ class LerimRuntime:
 		if not index_path.exists():
 			index_path.write_text("# Memory Index\n", encoding="utf-8")
 
-		# Build primary + fallback model builders from config. Each builder
-		# produces a fresh `OpenAIChatModel` so that retry / fallback loops
-		# never reuse a stale agent state.
-		primary_provider = self.config.agent_role.provider
-		primary_model = self.config.agent_role.model
-
+		# Build ONE robust PydanticAI model from Lerim Config. This is a
+		# `FallbackModel` wrapping the primary provider/model with HTTP retry
+		# (AsyncTenacityTransport for 429/5xx/network) plus every entry in
+		# `[roles.agent].fallback_models` as a secondary model (also with its
+		# own HTTP retry). The FallbackModel switches providers inside the
+		# model layer — the enclosing agent run continues from where it was
+		# without any restart.
+		#
+		# The outer `_run_with_fallback` loop is kept as a last-resort safety
+		# net: if something escapes both the HTTP retry and FallbackModel
+		# layers (e.g., UsageLimitExceeded from PydanticAI, or a connector
+		# bug), it handles the retry/logging/short-circuit. In the common
+		# case it sees no errors because tenacity + FallbackModel already
+		# recovered them.
 		def _primary_builder() -> Any:
-			"""Return a fresh primary PydanticAI chat model."""
-			return build_pydantic_model(
-				provider_name=primary_provider,
-				model_name=primary_model,
-			)
-
-		model_builders: list[Callable[[], Any]] = [_primary_builder]
-		for fb_spec in self.config.agent_role.fallback_models:
-			if ":" in fb_spec:
-				fb_provider, fb_model = fb_spec.split(":", 1)
-			else:
-				fb_provider, fb_model = primary_provider, fb_spec
-			def _fallback_builder(p=fb_provider, m=fb_model) -> Any:
-				"""Return a fresh fallback PydanticAI chat model."""
-				return build_pydantic_model(provider_name=p, model_name=m)
-			model_builders.append(_fallback_builder)
+			"""Return the (single) robust PydanticAI model for this run."""
+			return build_pydantic_model("agent", config=self.config)
 
 		def _call(model: Any) -> FinalizeResult:
 			"""Invoke the PydanticAI three-pass pipeline with the given model."""
@@ -520,7 +517,7 @@ class LerimRuntime:
 		result: FinalizeResult = self._run_with_fallback(
 			flow="sync",
 			callable_fn=_call,
-			model_builders=model_builders,
+			model_builders=[_primary_builder],
 		)
 
 		# Extract completion summary from FinalizeResult.

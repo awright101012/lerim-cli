@@ -1,7 +1,18 @@
-"""Provider builders for DSPy pipelines and shared provider utilities.
+"""Provider builders for DSPy and PydanticAI pipelines and shared utilities.
 
-Includes provider capability registry, model name normalization,
-role validation, and DSPy LM builder functions.
+Single source of truth for role → model construction. Includes:
+- Provider capability registry (env var names, known models)
+- Model name normalization per provider
+- Role validation
+- DSPy LM builders (used by maintain/ask agents)
+- PydanticAI Model builders with HTTP retry + provider fallback (used by
+  the extract three-pass pipeline and the single-pass baseline)
+
+Provider base URLs are read from the `[providers]` section of `default.toml`
+(+ optional `~/.lerim/config.toml` override). API keys are resolved from
+environment variables via `Config`. Nothing is hardcoded in this module
+beyond the capability registry (which is a facts-about-providers table,
+not configuration).
 """
 
 from __future__ import annotations
@@ -10,10 +21,19 @@ from dataclasses import dataclass
 from typing import Literal
 
 import dspy
+from httpx import AsyncClient, HTTPStatusError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.models import Model
+from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
+from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from lerim.config.settings import Config, RoleConfig, get_config
 
 DSPyRoleName = Literal["agent"]
+PydanticAIRoleName = Literal["agent"]
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +289,221 @@ def build_dspy_fallback_lms(
 		)
 		for spec in specs
 	]
+
+
+# ---------------------------------------------------------------------------
+# PydanticAI model builders (extract agents use these)
+# ---------------------------------------------------------------------------
+
+
+def _make_retrying_http_client(
+	max_attempts: int = 5,
+	max_wait_seconds: int = 120,
+) -> AsyncClient:
+	"""Build an httpx AsyncClient with tenacity retries for transient errors.
+
+	Retries individual HTTP requests on 429 (honoring Retry-After header),
+	5xx server errors, and network errors at the transport layer —
+	transparent to the agent loop. A failed model request retries in-place
+	instead of crashing the enclosing agent run.
+
+	Does NOT retry on 400 (bad request — won't change), 401/403 (auth),
+	or other client errors. Those propagate as ModelHTTPError so a
+	FallbackModel wrapper can switch providers.
+	"""
+	def _validate_response(response):
+		# Raise HTTPStatusError for retryable status codes so tenacity picks it up.
+		if response.status_code in (429, 500, 502, 503, 504):
+			response.raise_for_status()
+
+	transport = AsyncTenacityTransport(
+		config=RetryConfig(
+			retry=retry_if_exception_type(HTTPStatusError),
+			wait=wait_retry_after(
+				fallback_strategy=wait_exponential(multiplier=2, min=1, max=60),
+				max_wait=max_wait_seconds,
+			),
+			stop=stop_after_attempt(max_attempts),
+			reraise=True,
+		),
+		validate_response=_validate_response,
+	)
+	return AsyncClient(transport=transport)
+
+
+def _build_pydantic_model_for_provider(
+	*,
+	provider: str,
+	model: str,
+	api_base: str,
+	cfg: Config,
+	role_label: str,
+) -> OpenAIChatModel:
+	"""Build a single PydanticAI OpenAI-compatible model with HTTP retry.
+
+	Uses the shared Config to resolve API keys and base URLs — no hardcoded
+	endpoints. Every provider Lerim supports has an OpenAI-compatible API,
+	so `OpenAIChatModel` with a `OpenAIProvider` works universally.
+	"""
+	provider = provider.strip().lower()
+	validate_provider_for_role(provider, "agent", model)
+
+	if provider == "ollama":
+		api_key = "ollama"
+	else:
+		api_key = _api_key_for_provider(cfg, provider)
+		if not api_key:
+			caps = PROVIDER_CAPABILITIES.get(provider, {})
+			env_name = caps.get("api_key_env", "<unknown>")
+			raise RuntimeError(
+				f"missing_api_key:{env_name} required for {role_label}"
+			)
+
+	base_url = api_base or _default_api_base(provider, cfg)
+	if not base_url:
+		raise RuntimeError(
+			f"missing_api_base:no default base URL configured for "
+			f"provider={provider} (set [providers].{provider} in default.toml)"
+		)
+
+	http_client = _make_retrying_http_client()
+	openai_provider = OpenAIProvider(
+		base_url=base_url,
+		api_key=api_key,
+		http_client=http_client,
+	)
+	canonical_model = normalize_model_name(provider, model)
+	return OpenAIChatModel(canonical_model, provider=openai_provider)
+
+
+def _wrap_with_fallback(
+	primary: OpenAIChatModel,
+	fallbacks: list[OpenAIChatModel],
+) -> Model:
+	"""Return primary alone if no fallbacks, else a FallbackModel wrapping both."""
+	if not fallbacks:
+		return primary
+	return FallbackModel(
+		primary,
+		*fallbacks,
+		fallback_on=(ModelHTTPError, ModelAPIError),
+	)
+
+
+def build_pydantic_model(
+	role: PydanticAIRoleName = "agent",
+	*,
+	config: Config | None = None,
+) -> Model:
+	"""Build a robust PydanticAI model for the given role from Config.
+
+	Reads provider/model/fallbacks from `Config` (from `default.toml` +
+	`~/.lerim/config.toml`) — this is the runtime-side builder used by
+	`LerimRuntime.sync()` and by agent `__main__` self-tests. For the eval
+	harness, where each eval cell specifies its own provider/model in an
+	eval TOML, use `build_pydantic_model_from_provider` instead.
+
+	Returns a `FallbackModel` wrapping:
+
+	- Primary: the role's configured provider/model with HTTP-level retry
+	  (`AsyncTenacityTransport` — handles 429/5xx/network in place)
+	- Fallbacks: every entry in `role.fallback_models` (e.g. `"zai:glm-4.7"`),
+	  each with its own retry transport
+
+	The FallbackModel switches to the next model when the current one
+	raises `ModelHTTPError` or `ModelAPIError` — without restarting the
+	agent run. If no fallback models are configured, returns the bare
+	retrying primary model (which still has HTTP retry).
+	"""
+	cfg = config or get_config()
+	role_cfg = _dspy_role_config(cfg, role)
+
+	primary = _build_pydantic_model_for_provider(
+		provider=role_cfg.provider,
+		model=role_cfg.model,
+		api_base=role_cfg.api_base,
+		cfg=cfg,
+		role_label=f"roles.{role}.provider={role_cfg.provider}",
+	)
+
+	fallbacks: list[OpenAIChatModel] = []
+	for raw in role_cfg.fallback_models:
+		try:
+			spec = parse_fallback_spec(raw)
+			fallbacks.append(
+				_build_pydantic_model_for_provider(
+					provider=spec.provider,
+					model=spec.model,
+					api_base="",
+					cfg=cfg,
+					role_label=f"roles.{role}.fallback={spec.provider}:{spec.model}",
+				)
+			)
+		except RuntimeError:
+			# Missing API key for the fallback — skip it silently. The
+			# primary's HTTP retries still protect against transient errors.
+			continue
+
+	return _wrap_with_fallback(primary, fallbacks)
+
+
+def build_pydantic_model_from_provider(
+	provider: str,
+	model: str,
+	*,
+	fallback_models: tuple[str, ...] | list[str] | None = None,
+	config: Config | None = None,
+) -> Model:
+	"""Build a robust PydanticAI model from explicit provider/model args.
+
+	Used by the eval harness (each eval TOML cell specifies its own
+	provider/model/fallbacks that override the default Lerim Config) and
+	by the eval judge (which may use a different model than the agent role).
+
+	Unlike `build_pydantic_model`, this does NOT read provider/model from
+	Lerim's `Config.agent_role`. It still uses `Config` to resolve API keys
+	from environment variables and base URLs from `[providers]`, so the
+	config file stays the single source of truth for endpoints and keys.
+
+	Args:
+		provider: Provider name (e.g. "minimax", "zai", "openai", "ollama").
+		model: Model name for the provider.
+		fallback_models: Optional sequence of `"provider:model"` strings
+			(same format as `default.toml` `fallback_models`). None means
+			no fallback — just the primary with HTTP-level retry.
+		config: Optional Config override (defaults to `get_config()`).
+
+	Returns:
+		FallbackModel if fallbacks are configured and their API keys
+		are available, else a bare retrying OpenAIChatModel primary.
+	"""
+	cfg = config or get_config()
+
+	primary = _build_pydantic_model_for_provider(
+		provider=provider,
+		model=model,
+		api_base="",
+		cfg=cfg,
+		role_label=f"explicit_provider={provider}",
+	)
+
+	fallbacks: list[OpenAIChatModel] = []
+	for raw in fallback_models or ():
+		try:
+			spec = parse_fallback_spec(raw)
+			fallbacks.append(
+				_build_pydantic_model_for_provider(
+					provider=spec.provider,
+					model=spec.model,
+					api_base="",
+					cfg=cfg,
+					role_label=f"explicit_fallback={spec.provider}:{spec.model}",
+				)
+			)
+		except RuntimeError:
+			continue
+
+	return _wrap_with_fallback(primary, fallbacks)
 
 
 def list_provider_models(provider: str) -> list[str]:

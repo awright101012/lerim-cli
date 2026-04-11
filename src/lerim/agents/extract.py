@@ -481,7 +481,7 @@ if __name__ == "__main__":
 	import sys
 	import tempfile
 
-	from lerim.agents.extract_pydanticai import build_model
+	from lerim.config.providers import build_pydantic_model
 
 	# Use fixture trace or first CLI arg
 	trace_path = Path(sys.argv[1]) if len(sys.argv) > 1 else (
@@ -501,7 +501,7 @@ if __name__ == "__main__":
 		print(f"Memory root: {memory_root}")
 		print()
 
-		model = build_model()
+		model = build_pydantic_model("agent")
 		result = run_extraction_three_pass(
 			memory_root=memory_root,
 			trace_path=trace_path,
