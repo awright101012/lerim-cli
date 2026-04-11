@@ -18,13 +18,13 @@ Override the test LLM: `LERIM_TEST_PROVIDER=openrouter LERIM_TEST_MODEL=openai/g
 
 Fast, deterministic, no LLM, no network. Covers session adapters (Claude, Codex, Cursor, OpenCode), memory layout and storage, config loading and merging, CLI parsing, dashboard API helpers, MemoryTools boundary checks, provider construction, cost tracking, job queue, transcript parsing, and regression contracts for public API surfaces.
 
-### Smoke (`tests/smoke/test_agent_smoke.py`, 8 tests)
+### Smoke (`tests/smoke/test_agent_smoke.py`, 4 tests)
 
-Quick LLM sanity checks. Verifies ExtractAgent produces memory files with valid frontmatter and updates index.md, MaintainAgent runs on seeded and empty stores without crashing, and AskAgent answers questions or reports no memories. Gate: `LERIM_SMOKE=1`.
+Quick LLM sanity checks for maintain and ask. Verifies `MaintainAgent` runs on seeded and empty stores without crashing and `AskAgent` answers questions or reports no memories. Sync (extract) is no longer covered here — it moved to the PydanticAI three-pass pipeline; e2e and the eval harness cover it. Gate: `LERIM_SMOKE=1`.
 
 ### Integration (`tests/integration/`, 11 tests)
 
-Real LLM calls testing pipeline quality across multiple components. Files: `test_extraction_quality.py`, `test_maintain_quality.py`, `test_ask_quality.py`. Covers extraction output quality (schema conformance, type classification, minimum recall), maintain quality (dedup detection, staleness handling, index consistency), and ask quality (answer relevance, memory citation). Gate: `LERIM_INTEGRATION=1`.
+Real LLM calls testing pipeline quality across multiple components. Files: `test_extraction_quality.py` (runs `run_extraction_three_pass` against fixture traces), `test_maintain_quality.py`, `test_ask_quality.py`. Covers extraction output quality (schema conformance, type classification, minimum recall), maintain quality (dedup detection, staleness handling, index consistency), and ask quality (answer relevance, memory citation). Gate: `LERIM_INTEGRATION=1`.
 
 ### E2E (`tests/e2e/`, ~7 tests)
 
@@ -32,8 +32,9 @@ Full agent flows as a user would invoke them. Files: `test_sync_flow.py`, `test_
 
 ## Architecture Under Test
 
-- **Agents**: `ExtractAgent`, `MaintainAgent`, `AskAgent` -- all DSPy ReAct modules taking `Path` args directly (no RuntimeContext).
-- **Tools**: `MemoryTools` class with 7 methods: `read`, `grep`, `scan`, `write`, `edit`, `archive`, `verify_index`.
+- **Sync**: PydanticAI three-pass pipeline `run_extraction_three_pass(memory_root, trace_path, model, run_folder)` — reflect, extract, finalize. Each pass is a `pydantic_ai.Agent` with typed Pydantic outputs and per-pass `UsageLimits`.
+- **Agents (DSPy)**: `MaintainAgent`, `AskAgent` -- still DSPy ReAct modules taking `Path` args directly (no RuntimeContext).
+- **Tools**: `MemoryTools` class with 7 methods: `read`, `grep`, `scan`, `write`, `edit`, `archive`, `verify_index`. Extract uses six standalone async tool functions from `lerim.agents.extract` that adapt calls onto `MemoryTools`.
 - **Config**: single `[roles.agent]` role (no separate extract_role).
 - **Memory**: 3-field frontmatter (`name`, `description`, `type`), `index.md`, `summaries/` with date-prefixed files.
 - **No** explorer subagent, no windowing pipeline.

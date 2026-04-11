@@ -44,8 +44,11 @@ class RoleConfig:
 	thinking: bool = True
 	temperature: float = 1.0
 	max_tokens: int = 32000
-	# Agent-specific
-	max_iters_sync: int = 15
+	# PydanticAI three-pass sync usage limits (per-pass request_limit)
+	usage_limit_reflect: int = 15
+	usage_limit_extract: int = 15
+	usage_limit_finalize: int = 8
+	# DSPy ReAct iteration limits (maintain/ask still DSPy)
 	max_iters_maintain: int = 30
 	max_iters_ask: int = 30
 	# DSPy-specific
@@ -276,7 +279,9 @@ def _build_role(
 		thinking=bool(raw.get("thinking", True)),
 		temperature=float(raw.get("temperature", 1.0)),
 		max_tokens=int(raw.get("max_tokens", 32000)),
-		max_iters_sync=int(raw.get("max_iters_sync", 15)),
+		usage_limit_reflect=int(raw.get("usage_limit_reflect", 15)),
+		usage_limit_extract=int(raw.get("usage_limit_extract", 15)),
+		usage_limit_finalize=int(raw.get("usage_limit_finalize", 8)),
 		max_iters_maintain=int(raw.get("max_iters_maintain", 30)),
 		max_iters_ask=int(raw.get("max_iters_ask", 30)),
 		max_window_tokens=int(raw.get("max_window_tokens", 100000)),

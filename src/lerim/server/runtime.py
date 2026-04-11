@@ -1,8 +1,14 @@
-"""DSPy ReAct runtime for Lerim sync, maintain, and ask flows.
+"""Runtime orchestrator for Lerim sync (PydanticAI) and maintain/ask (DSPy).
 
-Synchronous DSPy ReAct orchestrator. Creates DSPy modules (ExtractAgent,
-MaintainAgent, AskAgent) per call and runs them via dspy.context(lm=...)
-for thread-safe model switching.
+Sync uses the PydanticAI three-pass pipeline in
+`lerim.agents.extract.run_extraction_three_pass`, constructed per call with a
+fresh `OpenAIChatModel` built by `lerim.agents.extract_pydanticai.build_model`.
+Maintain and ask still use DSPy ReAct modules (MaintainAgent, AskAgent) run
+via `dspy.context(lm=...)` for thread-safe model switching.
+
+Two retry/fallback helpers coexist until maintain/ask migrate:
+- `_run_with_fallback` — PydanticAI-aware, called only by `sync()`.
+- `_run_dspy_with_fallback` — DSPy string-match, called by maintain/ask.
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import dspy
 from lerim.config.settings import Config, get_config
@@ -25,7 +31,8 @@ from lerim.agents.contracts import (
 from lerim.agents.ask import format_ask_hints
 from lerim.agents.maintain import MaintainAgent
 from lerim.config.providers import build_dspy_fallback_lms, build_dspy_lm
-from lerim.agents.extract import ExtractAgent
+from lerim.agents.extract import FinalizeResult, run_extraction_three_pass
+from lerim.agents.extract_pydanticai import build_model as build_pydantic_model
 
 logger = logging.getLogger("lerim.runtime")
 
@@ -97,6 +104,49 @@ def _write_text_with_newline(path: Path, content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PydanticAI quota error detection (for sync path)
+# ---------------------------------------------------------------------------
+
+
+def _is_quota_error_pydantic(exc: Exception) -> bool:
+	"""Detect rate-limit / quota errors across PydanticAI provider backends.
+
+	PydanticAI propagates provider exceptions directly, so this checks
+	`openai.RateLimitError`, `openai.APIStatusError(status_code=429)`, and
+	`httpx.HTTPStatusError` with a 429 response. Falls back to a string
+	match for wrapped / obscured errors so provider quirks still fire the
+	fallback path.
+	"""
+	try:
+		from openai import APIStatusError, RateLimitError
+	except ImportError:
+		RateLimitError = APIStatusError = None
+	try:
+		from httpx import HTTPStatusError
+	except ImportError:
+		HTTPStatusError = None
+
+	if RateLimitError is not None and isinstance(exc, RateLimitError):
+		return True
+	if (
+		APIStatusError is not None
+		and isinstance(exc, APIStatusError)
+		and getattr(exc, "status_code", None) == 429
+	):
+		return True
+	if HTTPStatusError is not None and isinstance(exc, HTTPStatusError):
+		try:
+			if exc.response.status_code == 429:
+				return True
+		except Exception:
+			pass
+
+	# String fallback for wrapped/obscured errors
+	msg = str(exc).lower()
+	return "429" in msg or "rate limit" in msg or "quota" in msg
+
+
+# ---------------------------------------------------------------------------
 # Trajectory adapter: convert ReAct trajectory dict to trace list
 # ---------------------------------------------------------------------------
 
@@ -131,14 +181,18 @@ def _trajectory_to_trace_list(trajectory: dict) -> list[dict]:
 
 
 class LerimRuntime:
-	"""Runtime orchestrator for DSPy ReAct sync, maintain, and ask flows."""
+	"""Runtime orchestrator — PydanticAI sync + DSPy maintain/ask flows."""
 
 	def __init__(
 		self,
 		default_cwd: str | None = None,
 		config: Config | None = None,
 	) -> None:
-		"""Create DSPy ReAct runtime with model configuration.
+		"""Create the runtime with model configuration.
+
+		Sync runs PydanticAI three-pass pipeline; maintain/ask run DSPy
+		ReAct modules. DSPy LMs are pre-built here for the maintain/ask path;
+		sync builds its model fresh per call from config.
 
 		Args:
 			default_cwd: Default working directory for path resolution.
@@ -167,7 +221,11 @@ class LerimRuntime:
 
 	@staticmethod
 	def _is_quota_error(error_msg: str) -> bool:
-		"""Return True if the error message indicates a quota/rate-limit error."""
+		"""Return True if the error message indicates a quota/rate-limit error.
+
+		String-match version used by the DSPy retry path (maintain/ask).
+		The PydanticAI sync path uses `_is_quota_error_pydantic` instead.
+		"""
 		lower = error_msg.lower()
 		return "429" in error_msg or "rate limit" in lower or "quota" in lower
 
@@ -178,10 +236,97 @@ class LerimRuntime:
 		return f"lerim-{secrets.token_hex(6)}"
 
 	# ------------------------------------------------------------------
-	# Retry + fallback
+	# Retry + fallback (PydanticAI path for sync)
 	# ------------------------------------------------------------------
 
 	def _run_with_fallback(
+		self,
+		*,
+		flow: str,
+		callable_fn: Callable[[Any], Any],
+		model_builders: list[Callable[[], Any]],
+		max_attempts: int = 3,
+	) -> Any:
+		"""Run a PydanticAI callable with retry + fallback model support.
+
+		Iterates over `model_builders` (primary first, then each fallback). For
+		each builder, makes up to `max_attempts` attempts. Catches:
+
+		- `UsageLimitExceeded`: local budget exhausted — re-raised immediately.
+		- Quota/rate-limit errors (detected via `_is_quota_error_pydantic`):
+		  short-circuits the current model's retry loop and switches to the
+		  next builder.
+		- Other exceptions: retries the same builder with exponential backoff.
+
+		Args:
+			flow: Flow name used in log messages (e.g. "sync").
+			callable_fn: A callable that takes a model instance and runs the
+				pipeline. Typically closes over per-call state (deps, paths).
+			model_builders: Ordered list of zero-arg factories. Each must
+				return a fresh `OpenAIChatModel` instance.
+			max_attempts: Retry attempts per builder before moving on.
+
+		Returns:
+			Whatever `callable_fn(model)` returns on success.
+
+		Raises:
+			UsageLimitExceeded: Propagated immediately; no retry or fallback.
+			RuntimeError: If all builders and attempts are exhausted.
+		"""
+		from pydantic_ai.exceptions import UsageLimitExceeded
+
+		last_exc: Exception | None = None
+		for model_idx, builder in enumerate(model_builders):
+			model_label = (
+				self.config.agent_role.model
+				if model_idx == 0
+				else f"fallback-{model_idx}"
+			)
+			for attempt in range(1, max_attempts + 1):
+				try:
+					logger.info(
+						f"[{flow}] pydantic-ai attempt {attempt}/{max_attempts} "
+						f"(model={model_label})"
+					)
+					model = builder()
+					return callable_fn(model)
+				except UsageLimitExceeded as exc:
+					logger.warning(
+						f"[{flow}] usage limit exceeded, short-circuiting: {exc}"
+					)
+					raise
+				except Exception as exc:
+					last_exc = exc
+					if _is_quota_error_pydantic(exc):
+						logger.warning(
+							f"[{flow}] quota error on {model_label}: {str(exc)[:100]}"
+						)
+						break  # switch to next model builder
+					if attempt < max_attempts:
+						wait_time = min(2 ** attempt, 8)
+						logger.warning(
+							f"[{flow}] transient error on attempt "
+							f"{attempt}/{max_attempts} ({type(exc).__name__}): "
+							f"{str(exc)[:100]}; retrying in {wait_time}s..."
+						)
+						time.sleep(wait_time)
+						continue
+					logger.error(
+						f"[{flow}] exhausted retries on {model_label}: "
+						f"{str(exc)[:100]}"
+					)
+					break
+
+		raise RuntimeError(
+			f"[{flow}] Failed after trying {len(model_builders)} model(s). "
+			f"Last error: {last_exc}"
+		) from last_exc
+
+	# ------------------------------------------------------------------
+	# Retry + fallback (DSPy path for maintain/ask)
+	# ------------------------------------------------------------------
+
+	def _run_dspy_with_fallback(
 		self,
 		*,
 		flow: str,
@@ -196,8 +341,8 @@ class LerimRuntime:
 		Non-quota errors retry the same LM with exponential backoff.
 
 		Args:
-			flow: Flow name for log messages (e.g. "sync", "maintain", "ask").
-			module: The DSPy module to call (ExtractAgent, MaintainAgent, AskAgent).
+			flow: Flow name for log messages (e.g. "maintain", "ask").
+			module: The DSPy module to call (MaintainAgent, AskAgent).
 			input_args: Keyword arguments passed to module(**input_args).
 			max_attempts: Retry attempts per model.
 
@@ -279,18 +424,19 @@ class LerimRuntime:
 		trace_path: str | Path,
 		memory_root: str | Path | None = None,
 		workspace_root: str | Path | None = None,
-		adapter: dspy.Adapter | None = None,
+		adapter: Any | None = None,
 	) -> dict[str, Any]:
 		"""Run memory-write sync flow and return stable contract payload.
 
-		Run memory-write sync and return a SyncResultContract-validated dict.
+		Runs the PydanticAI three-pass extraction pipeline
+		(`run_extraction_three_pass`) with primary and fallback models.
 
 		Args:
 			trace_path: Path to the session trace JSONL file.
 			memory_root: Override for the memory directory.
 			workspace_root: Override for the workspace directory.
-			adapter: Optional DSPy adapter for the ExtractAgent. Defaults to
-				XMLAdapter when None (set inside ExtractAgent.__init__).
+			adapter: Retained for backwards-compatible daemon signatures. No
+				longer used — PydanticAI uses native function calling directly.
 
 		Returns:
 			Validated SyncResultContract payload dict.
@@ -299,12 +445,13 @@ class LerimRuntime:
 			FileNotFoundError: If trace_path does not exist.
 			RuntimeError: On agent failure or missing artifacts.
 		"""
+		del adapter  # DSPy adapter slot kept for caller compat; ignored
 		trace_file = Path(trace_path).expanduser().resolve()
 		if not trace_file.exists() or not trace_file.is_file():
 			raise FileNotFoundError(f"trace_path_missing:{trace_file}")
 
 		repo_root = Path(self._default_cwd or Path.cwd()).expanduser().resolve()
-		return self._sync_inner(trace_file, repo_root, memory_root, workspace_root, adapter)
+		return self._sync_inner(trace_file, repo_root, memory_root, workspace_root)
 
 	def _sync_inner(
 		self,
@@ -312,7 +459,6 @@ class LerimRuntime:
 		repo_root: Path,
 		memory_root: str | Path | None,
 		workspace_root: str | Path | None,
-		adapter: dspy.Adapter | None = None,
 	) -> dict[str, Any]:
 		"""Inner sync logic called by sync()."""
 		resolved_memory_root, resolved_workspace_root = _resolve_runtime_roots(
@@ -337,41 +483,58 @@ class LerimRuntime:
 		if not index_path.exists():
 			index_path.write_text("# Memory Index\n", encoding="utf-8")
 
-		# Create the ExtractAgent module and run with retry + fallback.
-		agent = ExtractAgent(
-			memory_root=resolved_memory_root,
-			trace_path=trace_file,
-			run_folder=run_folder,
-			max_iters=self.config.agent_role.max_iters_sync,
-			adapter=adapter,
-		)
-		prediction = self._run_with_fallback(
+		# Build primary + fallback model builders from config. Each builder
+		# produces a fresh `OpenAIChatModel` so that retry / fallback loops
+		# never reuse a stale agent state.
+		primary_provider = self.config.agent_role.provider
+		primary_model = self.config.agent_role.model
+
+		def _primary_builder() -> Any:
+			"""Return a fresh primary PydanticAI chat model."""
+			return build_pydantic_model(
+				provider_name=primary_provider,
+				model_name=primary_model,
+			)
+
+		model_builders: list[Callable[[], Any]] = [_primary_builder]
+		for fb_spec in self.config.agent_role.fallback_models:
+			if ":" in fb_spec:
+				fb_provider, fb_model = fb_spec.split(":", 1)
+			else:
+				fb_provider, fb_model = primary_provider, fb_spec
+			def _fallback_builder(p=fb_provider, m=fb_model) -> Any:
+				"""Return a fresh fallback PydanticAI chat model."""
+				return build_pydantic_model(provider_name=p, model_name=m)
+			model_builders.append(_fallback_builder)
+
+		def _call(model: Any) -> FinalizeResult:
+			"""Invoke the PydanticAI three-pass pipeline with the given model."""
+			return run_extraction_three_pass(
+				memory_root=resolved_memory_root,
+				trace_path=trace_file,
+				model=model,
+				run_folder=run_folder,
+				return_messages=False,
+			)
+
+		result: FinalizeResult = self._run_with_fallback(
 			flow="sync",
-			module=agent,
-			input_args={},
+			callable_fn=_call,
+			model_builders=model_builders,
 		)
 
-		# Extract completion summary from prediction.
-		response_text = str(
-			getattr(prediction, "completion_summary", "") or ""
-		).strip() or "(no response)"
+		# Extract completion summary from FinalizeResult.
+		response_text = (result.completion_summary or "").strip() or "(no response)"
 
 		# Write agent response text.
 		_write_text_with_newline(artifact_paths["agent_log"], response_text)
 
-		# Save agent trace from prediction trajectory.
+		# The PydanticAI three-pass pipeline currently does not write
+		# agent_trace.json itself. Write an empty placeholder so downstream
+		# consumers (daemon, dashboard) don't break on missing file. Full
+		# message capture is deferred until Phase 3 wires return_messages=True.
 		agent_trace_path = run_folder / "agent_trace.json"
-		try:
-			trajectory = getattr(prediction, "trajectory", {}) or {}
-			trace_data = _trajectory_to_trace_list(trajectory)
-			agent_trace_path.write_text(
-				json.dumps(trace_data, default=str, indent=2),
-				encoding="utf-8",
-			)
-		except Exception as exc:
-			logger.warning(
-				"[sync] Failed to write agent trace: {}", exc
-			)
+		if not agent_trace_path.exists():
 			agent_trace_path.write_text("[]", encoding="utf-8")
 
 		payload = {
@@ -440,7 +603,7 @@ class LerimRuntime:
 			memory_root=resolved_memory_root,
 			max_iters=self.config.agent_role.max_iters_maintain,
 		)
-		prediction = self._run_with_fallback(
+		prediction = self._run_dspy_with_fallback(
 			flow="maintain",
 			module=agent,
 			input_args={},
@@ -527,7 +690,7 @@ class LerimRuntime:
 			memory_root=resolved_memory_root,
 			max_iters=self.config.agent_role.max_iters_ask,
 		)
-		prediction = self._run_with_fallback(
+		prediction = self._run_dspy_with_fallback(
 			flow="ask",
 			module=agent,
 			input_args={

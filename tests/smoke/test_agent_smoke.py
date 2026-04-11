@@ -1,7 +1,11 @@
-"""Smoke tests for Lerim agents — real LLM round-trips.
+"""Smoke tests for Lerim maintain/ask agents — real LLM round-trips.
 
 Gate: LERIM_SMOKE=1. Uses minimax (or LERIM_TEST_PROVIDER override).
 Each test should complete in <60s.
+
+Sync (extract) is no longer covered here — it's a PydanticAI three-pass
+pipeline now. End-to-end sync coverage lives in `tests/e2e/test_sync_flow.py`
+(full `LerimRuntime.sync()` path) and in the eval harness.
 """
 
 from __future__ import annotations
@@ -9,13 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import dspy
-import frontmatter as fm_lib
 import pytest
 
 from lerim.agents.ask import AskAgent
-from lerim.agents.extract import ExtractAgent
 from lerim.agents.maintain import MaintainAgent
-from lerim.agents.tools import MEMORY_TYPES
 from lerim.config.providers import build_dspy_lm
 from lerim.config.settings import get_config
 
@@ -52,88 +53,6 @@ def seeded_memory_root(seeded_memory):
 def _memory_files(memory_root: Path) -> list[Path]:
 	"""Return non-index .md files in memory_root."""
 	return [f for f in memory_root.glob("*.md") if f.name != "index.md"]
-
-
-# ── Extract tests ──────────────────────────────────────────────────
-
-
-@pytest.mark.smoke
-@pytest.mark.timeout(240)
-def test_extract_runs_and_produces_memory(memory_root, lead_lm):
-	"""ExtractAgent creates at least one memory file from a short trace."""
-	agent = ExtractAgent(
-		memory_root=memory_root,
-		trace_path=TRACE_PATH,
-		max_iters=15,
-	)
-	with dspy.context(lm=lead_lm):
-		prediction = agent.forward()
-
-	assert prediction.completion_summary
-	assert isinstance(prediction.completion_summary, str)
-	assert len(_memory_files(memory_root)) >= 1
-
-
-@pytest.mark.smoke
-@pytest.mark.timeout(240)
-def test_extract_produces_valid_frontmatter(memory_root, lead_lm):
-	"""Extracted memory files have valid 3-field frontmatter."""
-	agent = ExtractAgent(
-		memory_root=memory_root,
-		trace_path=TRACE_PATH,
-		max_iters=15,
-	)
-	with dspy.context(lm=lead_lm):
-		agent.forward()
-
-	files = _memory_files(memory_root)
-	assert len(files) >= 1, "Expected at least one memory file"
-
-	for f in files:
-		post = fm_lib.load(str(f))
-		assert "name" in post.metadata, f"{f.name}: missing 'name' in frontmatter"
-		assert "description" in post.metadata, f"{f.name}: missing 'description'"
-		assert "type" in post.metadata, f"{f.name}: missing 'type'"
-		assert post.metadata["type"] in MEMORY_TYPES, (
-			f"{f.name}: type '{post.metadata['type']}' not in {MEMORY_TYPES}"
-		)
-
-
-@pytest.mark.smoke
-@pytest.mark.timeout(240)
-def test_extract_writes_summary(memory_root, lead_lm):
-	"""ExtractAgent writes at least one summary to summaries/."""
-	agent = ExtractAgent(
-		memory_root=memory_root,
-		trace_path=TRACE_PATH,
-		max_iters=20,
-	)
-	with dspy.context(lm=lead_lm):
-		agent.forward()
-
-	summaries_dir = memory_root / "summaries"
-	summary_files = list(summaries_dir.glob("*.md"))
-	assert len(summary_files) >= 1, "Expected at least one summary file"
-
-
-@pytest.mark.smoke
-@pytest.mark.timeout(240)
-def test_extract_updates_index(memory_root, lead_lm):
-	"""ExtractAgent updates index.md beyond the initial stub."""
-	agent = ExtractAgent(
-		memory_root=memory_root,
-		trace_path=TRACE_PATH,
-		max_iters=15,
-	)
-	with dspy.context(lm=lead_lm):
-		agent.forward()
-
-	index_path = memory_root / "index.md"
-	assert index_path.exists(), "index.md should exist"
-	content = index_path.read_text(encoding="utf-8")
-	assert len(content) > len("# Memory Index\n"), (
-		"index.md should have content beyond the initial stub"
-	)
 
 
 # ── Maintain tests ─────────────────────────────────────────────────

@@ -19,7 +19,10 @@ model = "MiniMax-M2.5"                 # OpenCode Go models: minimax-m2.7, minim
 api_base = ""
 # Model names are auto-normalized per provider (e.g. minimax-m2.5 → MiniMax-M2.5 for minimax provider).
 fallback_models = ["zai:glm-4.7"]  # auto-switch on quota/rate-limit errors
-max_iters_sync = 30                    # max ReAct iterations for agent role in sync flow
+# PydanticAI three-pass sync usage limits (per-pass request_limit)
+usage_limit_reflect = 15               # Pass 1 (reflect) max tool calls
+usage_limit_extract = 15               # Pass 2 (extract) max tool calls
+usage_limit_finalize = 8               # Pass 3 (finalize) max tool calls
 max_iters_maintain = 50                # max ReAct iterations for agent role in maintain flow
 max_iters_ask = 15                     # max ReAct iterations for agent role in ask flow
 openrouter_provider_order = []

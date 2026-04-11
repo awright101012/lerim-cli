@@ -1,15 +1,20 @@
-"""Unit tests for DSPy ReAct sync, maintain, and ask agents + LerimRuntime."""
+"""Unit tests for maintain/ask DSPy agents + LerimRuntime (sync = PydanticAI)."""
 
 from __future__ import annotations
 
 from dataclasses import replace
 
 import dspy
+import httpx
 import pytest
+from openai import RateLimitError
 
 from lerim.config.settings import RoleConfig
-from lerim.server.runtime import LerimRuntime, _trajectory_to_trace_list
-from lerim.agents.extract import ExtractAgent, ExtractSignature
+from lerim.server.runtime import (
+	LerimRuntime,
+	_is_quota_error_pydantic,
+	_trajectory_to_trace_list,
+)
 from lerim.agents.maintain import MaintainAgent, MaintainSignature
 from lerim.agents.ask import AskAgent, AskSignature
 from tests.helpers import make_config
@@ -18,27 +23,6 @@ from tests.helpers import make_config
 # ---------------------------------------------------------------------------
 # Signature docstring tests
 # ---------------------------------------------------------------------------
-
-
-def test_extract_signature_contains_steps():
-	"""ExtractSignature docstring should contain major phases."""
-	doc = ExtractSignature.__doc__
-	assert 'name="orient"' in doc
-	assert 'name="analyze"' in doc
-	assert 'name="dedup"' in doc
-	assert 'name="write"' in doc
-	assert 'name="index"' in doc
-	assert 'name="summarize"' in doc
-
-
-def test_sync_signature_contains_tool_names():
-	"""ExtractSignature docstring should reference new tool names."""
-	doc = ExtractSignature.__doc__
-	assert "scan()" in doc
-	assert "read(" in doc
-	assert "write(" in doc
-	assert "edit(" in doc
-	assert "grep(" in doc
 
 
 def test_maintain_signature_contains_steps():
@@ -90,12 +74,6 @@ def test_ask_signature_contains_layout():
 # ---------------------------------------------------------------------------
 
 
-def test_extract_signature_output_field():
-	"""ExtractSignature should have completion_summary output."""
-	fields = ExtractSignature.model_fields
-	assert "completion_summary" in fields
-
-
 def test_maintain_signature_output_field():
 	"""MaintainSignature should have completion_summary output."""
 	fields = MaintainSignature.model_fields
@@ -116,22 +94,6 @@ def test_ask_signature_has_typed_fields():
 # ---------------------------------------------------------------------------
 
 
-def test_extract_agent_construction(tmp_path):
-	"""ExtractAgent should create a dspy.ReAct module with a react attribute."""
-	mem_root = tmp_path / "memory"
-	mem_root.mkdir()
-	trace_file = tmp_path / "trace.jsonl"
-	trace_file.write_text('{"test": true}\n', encoding="utf-8")
-
-	agent = ExtractAgent(
-		memory_root=mem_root,
-		trace_path=trace_file,
-		run_folder=tmp_path / "run",
-		max_iters=5,
-	)
-	assert hasattr(agent, "react")
-
-
 def test_maintain_agent_construction(tmp_path):
 	"""MaintainAgent should create a dspy.ReAct module with a react attribute."""
 	mem_root = tmp_path / "memory"
@@ -148,19 +110,6 @@ def test_ask_agent_construction(tmp_path):
 
 	agent = AskAgent(memory_root=mem_root, max_iters=5)
 	assert hasattr(agent, "react")
-
-
-def test_extract_agent_is_dspy_module(tmp_path):
-	"""ExtractAgent should be a dspy.Module subclass."""
-	mem_root = tmp_path / "memory"
-	mem_root.mkdir()
-	trace_file = tmp_path / "trace.jsonl"
-	trace_file.write_text('{"test": true}\n', encoding="utf-8")
-
-	agent = ExtractAgent(
-		memory_root=mem_root, trace_path=trace_file, max_iters=5,
-	)
-	assert isinstance(agent, dspy.Module)
 
 
 def test_maintain_agent_is_dspy_module(tmp_path):
@@ -184,20 +133,6 @@ def test_ask_agent_is_dspy_module(tmp_path):
 # ---------------------------------------------------------------------------
 # Named predictors tests (optimization readiness)
 # ---------------------------------------------------------------------------
-
-
-def test_extract_agent_named_predictors(tmp_path):
-	"""ExtractAgent should expose named predictors for optimization."""
-	mem_root = tmp_path / "memory"
-	mem_root.mkdir()
-	trace_file = tmp_path / "trace.jsonl"
-	trace_file.write_text('{"test": true}\n', encoding="utf-8")
-
-	agent = ExtractAgent(
-		memory_root=mem_root, trace_path=trace_file, max_iters=5,
-	)
-	predictors = agent.named_predictors()
-	assert len(predictors) >= 2
 
 
 def test_maintain_agent_named_predictors(tmp_path):
@@ -425,115 +360,209 @@ def test_generate_session_id_uniqueness():
 
 
 # ---------------------------------------------------------------------------
-# Fallback retry logic tests (mocked, no LLM calls)
+# Quota detection (PydanticAI) — isinstance + string-fallback
 # ---------------------------------------------------------------------------
 
 
-def test_run_with_fallback_succeeds_on_primary(tmp_path, monkeypatch):
-	"""_run_with_fallback should return on first success without trying fallbacks."""
+def _make_rate_limit_error() -> RateLimitError:
+	"""Build a real openai.RateLimitError for isinstance-based detection."""
+	return RateLimitError(
+		message="rate limited",
+		response=httpx.Response(
+			429, request=httpx.Request("POST", "https://test"),
+		),
+		body=None,
+	)
+
+
+def test_is_quota_error_pydantic_rate_limit_instance():
+	"""openai.RateLimitError instance should be detected as a quota error."""
+	assert _is_quota_error_pydantic(_make_rate_limit_error())
+
+
+def test_is_quota_error_pydantic_httpx_429():
+	"""httpx.HTTPStatusError with status 429 should be detected as a quota error."""
+	request = httpx.Request("POST", "https://test")
+	response = httpx.Response(429, request=request)
+	exc = httpx.HTTPStatusError("rate limit", request=request, response=response)
+	assert _is_quota_error_pydantic(exc)
+
+
+def test_is_quota_error_pydantic_string_fallback():
+	"""String fallback catches wrapped providers that say 'rate limit'."""
+	assert _is_quota_error_pydantic(RuntimeError("http 429 rate limit"))
+	assert _is_quota_error_pydantic(RuntimeError("quota exceeded"))
+	assert _is_quota_error_pydantic(RuntimeError("Rate Limit hit"))
+
+
+def test_is_quota_error_pydantic_non_quota_returns_false():
+	"""Non-quota errors must not be treated as quota errors."""
+	assert not _is_quota_error_pydantic(RuntimeError("connection refused"))
+	assert not _is_quota_error_pydantic(ValueError("bad input"))
+
+
+# ---------------------------------------------------------------------------
+# Fallback retry logic tests (PydanticAI callable-based, no LLM calls)
+# ---------------------------------------------------------------------------
+
+
+def _build_sync_runtime(tmp_path, monkeypatch, *, fallback_count: int = 0):
+	"""Build a LerimRuntime with mocked DSPy LM builders for runtime construction."""
+	from unittest.mock import MagicMock
+
 	cfg = make_config(tmp_path)
 	role = RoleConfig(
 		provider="openrouter",
 		model="x-ai/grok-4.1-fast",
-		fallback_models=("openrouter:qwen/qwen3-coder",),
+		fallback_models=tuple(
+			f"openrouter:fallback-{i}" for i in range(fallback_count)
+		),
 	)
 	cfg = replace(cfg, agent_role=role, openrouter_api_key="test-key")
-	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)
+
+	monkeypatch.setattr(
+		"lerim.server.runtime.build_dspy_lm", lambda *a, **kw: MagicMock()
+	)
+	monkeypatch.setattr(
+		"lerim.server.runtime.build_dspy_fallback_lms", lambda *a, **kw: []
+	)
+	monkeypatch.setattr(
+		"lerim.config.providers.validate_provider_for_role",
+		lambda *a, **kw: None,
+	)
+	return LerimRuntime(default_cwd=str(tmp_path), config=cfg)
+
+
+def test_run_with_fallback_succeeds_on_primary(tmp_path, monkeypatch):
+	"""_run_with_fallback returns on first success without trying fallbacks."""
+	runtime = _build_sync_runtime(tmp_path, monkeypatch, fallback_count=1)
 
 	call_count = 0
 
-	class FakeModule(dspy.Module):
-		def forward(self, **kwargs):
-			nonlocal call_count
-			call_count += 1
-			return dspy.Prediction(completion_summary="success")
+	def fake_call(model):
+		"""Succeed on the first call so no fallback is needed."""
+		nonlocal call_count
+		call_count += 1
+		return "primary-success"
 
 	result = runtime._run_with_fallback(
 		flow="test",
-		module=FakeModule(),
-		input_args={},
+		callable_fn=fake_call,
+		model_builders=[lambda: "primary", lambda: "fallback"],
 	)
-	assert result.completion_summary == "success"
+	assert result == "primary-success"
 	assert call_count == 1
 
 
 def test_run_with_fallback_switches_on_quota_error(tmp_path, monkeypatch):
-	"""_run_with_fallback should switch to fallback model on quota error."""
+	"""Quota errors should trigger switch to the next fallback model builder."""
 	import lerim.server.runtime as runtime_mod
 	monkeypatch.setattr(runtime_mod.time, "sleep", lambda _: None)
+	runtime = _build_sync_runtime(tmp_path, monkeypatch, fallback_count=1)
 
-	cfg = make_config(tmp_path)
-	role = RoleConfig(
-		provider="openrouter",
-		model="x-ai/grok-4.1-fast",
-		fallback_models=("openrouter:qwen/qwen3-coder",),
-	)
-	cfg = replace(cfg, agent_role=role, openrouter_api_key="test-key")
-	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)
+	seen_models = []
 
-	models_tried = []
-
-	class FakeModule(dspy.Module):
-		def forward(self, **kwargs):
-			if len(models_tried) == 0:
-				models_tried.append("primary")
-				raise RuntimeError("Error 429: Rate limit exceeded")
-			models_tried.append("fallback")
-			return dspy.Prediction(completion_summary="fallback success")
+	def fake_call(model):
+		"""Fail on primary with RateLimitError, succeed on fallback."""
+		seen_models.append(model)
+		if model == "primary":
+			raise _make_rate_limit_error()
+		return "fallback-success"
 
 	result = runtime._run_with_fallback(
 		flow="test",
-		module=FakeModule(),
-		input_args={},
+		callable_fn=fake_call,
+		model_builders=[lambda: "primary", lambda: "fallback"],
 	)
-	assert result.completion_summary == "fallback success"
-	assert models_tried == ["primary", "fallback"]
+	assert result == "fallback-success"
+	assert seen_models == ["primary", "fallback"]
 
 
 def test_run_with_fallback_raises_when_all_exhausted(tmp_path, monkeypatch):
-	"""_run_with_fallback should raise RuntimeError when all models fail."""
+	"""_run_with_fallback raises RuntimeError when all models + attempts fail."""
 	import lerim.server.runtime as runtime_mod
 	monkeypatch.setattr(runtime_mod.time, "sleep", lambda _: None)
+	runtime = _build_sync_runtime(tmp_path, monkeypatch, fallback_count=0)
 
-	cfg = _runtime_config(tmp_path)
-	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)
-
-	class FakeModule(dspy.Module):
-		def forward(self, **kwargs):
-			raise RuntimeError("Connection timeout")
+	def always_fail(model):
+		"""Non-quota transient error that should retry then exhaust."""
+		raise RuntimeError("connection refused")
 
 	with pytest.raises(RuntimeError, match="Failed after trying 1 model"):
 		runtime._run_with_fallback(
 			flow="test",
-			module=FakeModule(),
-			input_args={},
+			callable_fn=always_fail,
+			model_builders=[lambda: "primary"],
+			max_attempts=2,
 		)
 
 
-def test_run_with_fallback_retries_same_model_on_non_quota_error(
-	tmp_path, monkeypatch,
-):
-	"""_run_with_fallback should retry same model on non-quota errors with backoff."""
+def test_run_with_fallback_retries_same_model_on_transient(tmp_path, monkeypatch):
+	"""Non-quota errors retry the same model with backoff until success."""
 	import lerim.server.runtime as runtime_mod
 	monkeypatch.setattr(runtime_mod.time, "sleep", lambda _: None)
+	runtime = _build_sync_runtime(tmp_path, monkeypatch, fallback_count=0)
 
-	cfg = _runtime_config(tmp_path)
-	runtime = LerimRuntime(default_cwd=str(tmp_path), config=cfg)
+	attempts = 0
 
-	attempt_count = 0
-
-	class FakeModule(dspy.Module):
-		def forward(self, **kwargs):
-			nonlocal attempt_count
-			attempt_count += 1
-			if attempt_count < 3:
-				raise RuntimeError("Server error 500")
-			return dspy.Prediction(completion_summary="recovered")
+	def sometimes_fail(model):
+		"""Fail twice with a non-quota error, then succeed on the third try."""
+		nonlocal attempts
+		attempts += 1
+		if attempts < 3:
+			raise RuntimeError("Internal server error 500")
+		return "recovered"
 
 	result = runtime._run_with_fallback(
 		flow="test",
-		module=FakeModule(),
-		input_args={},
+		callable_fn=sometimes_fail,
+		model_builders=[lambda: "primary"],
+		max_attempts=3,
 	)
-	assert result.completion_summary == "recovered"
-	assert attempt_count == 3
+	assert result == "recovered"
+	assert attempts == 3
+
+
+def test_run_with_fallback_usage_limit_short_circuits(tmp_path, monkeypatch):
+	"""UsageLimitExceeded is re-raised immediately without retries or fallback."""
+	from pydantic_ai.exceptions import UsageLimitExceeded
+
+	import lerim.server.runtime as runtime_mod
+	monkeypatch.setattr(runtime_mod.time, "sleep", lambda _: None)
+	runtime = _build_sync_runtime(tmp_path, monkeypatch, fallback_count=1)
+
+	call_count = 0
+
+	def blow_budget(model):
+		"""Exceed the local usage budget immediately."""
+		nonlocal call_count
+		call_count += 1
+		raise UsageLimitExceeded("request_limit exceeded")
+
+	with pytest.raises(UsageLimitExceeded):
+		runtime._run_with_fallback(
+			flow="test",
+			callable_fn=blow_budget,
+			model_builders=[lambda: "primary", lambda: "fallback"],
+			max_attempts=3,
+		)
+	assert call_count == 1  # no retries, no fallback attempt
+
+
+# ---------------------------------------------------------------------------
+# Runtime imports (Phase 2 invariant)
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_sync_imports_three_pass():
+	"""runtime.py must expose run_extraction_three_pass (the sync callable)."""
+	from lerim.server.runtime import run_extraction_three_pass
+
+	assert callable(run_extraction_three_pass)
+
+
+def test_runtime_sync_imports_pydantic_build_model():
+	"""runtime.py must expose build_pydantic_model for the model builder path."""
+	from lerim.server.runtime import build_pydantic_model
+
+	assert callable(build_pydantic_model)

@@ -1,7 +1,8 @@
-"""Unit tests for LerimRuntime DSPy ReAct orchestrator.
+"""Unit tests for LerimRuntime (PydanticAI sync + DSPy maintain/ask).
 
-Tests sync, maintain, and ask flows with all LLM calls mocked.
-Covers retry/fallback logic, trajectory conversion, and artifact writing.
+Tests sync, maintain, and ask flows with all LLM calls mocked. Covers
+retry/fallback logic (DSPy and PydanticAI variants), trajectory conversion,
+and artifact writing.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from unittest.mock import MagicMock
 import dspy
 import pytest
 
+from lerim.agents.extract import FinalizeResult
 from tests.helpers import make_config
 
 
@@ -258,12 +260,12 @@ class TestPathHelpers:
 
 
 # ---------------------------------------------------------------------------
-# _run_with_fallback
+# _run_dspy_with_fallback (maintain / ask path)
 # ---------------------------------------------------------------------------
 
 
-class TestRunWithFallback:
-	"""Tests for retry and fallback model logic."""
+class TestRunDSPyWithFallback:
+	"""Tests for the DSPy retry + fallback path used by maintain and ask."""
 
 	def test_success_first_attempt(self, tmp_path, monkeypatch):
 		"""Module succeeds on first attempt -- no retries."""
@@ -271,7 +273,7 @@ class TestRunWithFallback:
 		pred = _make_prediction()
 
 		mock_module = MagicMock(return_value=pred)
-		result = rt._run_with_fallback(
+		result = rt._run_dspy_with_fallback(
 			flow="test", module=mock_module, input_args={"x": 1}
 		)
 		assert result is pred
@@ -294,7 +296,7 @@ class TestRunWithFallback:
 			return pred
 
 		mock_module = MagicMock(side_effect=side_effect)
-		result = rt._run_with_fallback(
+		result = rt._run_dspy_with_fallback(
 			flow="test", module=mock_module, input_args={}, max_attempts=3
 		)
 		assert result is pred
@@ -328,7 +330,7 @@ class TestRunWithFallback:
 			return pred
 
 		mock_module = MagicMock(side_effect=side_effect)
-		result = rt._run_with_fallback(
+		result = rt._run_dspy_with_fallback(
 			flow="test", module=mock_module, input_args={}, max_attempts=2
 		)
 		assert result is pred
@@ -342,7 +344,7 @@ class TestRunWithFallback:
 			side_effect=RuntimeError("permanent failure")
 		)
 		with pytest.raises(RuntimeError, match="Failed after trying"):
-			rt._run_with_fallback(
+			rt._run_dspy_with_fallback(
 				flow="test", module=mock_module, input_args={}, max_attempts=2
 			)
 
@@ -350,6 +352,36 @@ class TestRunWithFallback:
 # ---------------------------------------------------------------------------
 # Sync flow
 # ---------------------------------------------------------------------------
+
+
+def _patch_pydantic_sync(monkeypatch, *, finalize: FinalizeResult):
+	"""Replace the PydanticAI sync callable + model builder with stubs.
+
+	The runtime's `sync()` flow calls `build_pydantic_model(...)` and
+	`run_extraction_three_pass(...)`. For unit tests we swap both so nothing
+	touches a real provider.
+	"""
+	monkeypatch.setattr(
+		"lerim.server.runtime.build_pydantic_model",
+		lambda provider_name, model_name: f"fake-model-{provider_name}",
+	)
+
+	def fake_three_pass(
+		*,
+		memory_root,
+		trace_path,
+		model,
+		run_folder=None,
+		return_messages=False,
+	):
+		"""Stub runner that returns a deterministic FinalizeResult."""
+		if return_messages:
+			return finalize, []
+		return finalize
+
+	monkeypatch.setattr(
+		"lerim.server.runtime.run_extraction_three_pass", fake_three_pass
+	)
 
 
 class TestSyncFlow:
@@ -363,29 +395,21 @@ class TestSyncFlow:
 
 	def test_sync_happy_path(self, tmp_path, monkeypatch):
 		"""sync() returns validated SyncResultContract payload on success."""
-		rt, mock_lm = _build_runtime(tmp_path, monkeypatch)
+		rt, _ = _build_runtime(tmp_path, monkeypatch)
 		(tmp_path / "memory").mkdir(exist_ok=True)
 
 		# Create trace file
 		trace_file = tmp_path / "trace.jsonl"
 		trace_file.write_text('{"type": "test"}\n', encoding="utf-8")
 
-		# Mock agent modules
-		pred = _make_prediction(
-			completion_summary="Extracted 2 memories.",
-			trajectory={
-				"thought_0": "Analyzing trace",
-				"tool_name_0": "write",
-				"tool_args_0": {},
-				"observation_0": "done",
-			},
+		_patch_pydantic_sync(
+			monkeypatch,
+			finalize=FinalizeResult(
+				completion_summary="Extracted 2 memories.",
+				index_ok=True,
+				summary_filename="20260410-session.md",
+			),
 		)
-
-		monkeypatch.setattr(
-			"lerim.server.runtime.ExtractAgent",
-			lambda **kw: MagicMock(return_value=pred),
-		)
-
 
 		result = rt.sync(
 			trace_path=trace_file,
@@ -405,18 +429,13 @@ class TestSyncFlow:
 		trace_file = tmp_path / "trace.jsonl"
 		trace_file.write_text('{"type": "test"}\n', encoding="utf-8")
 
-		pred = _make_prediction(
-			completion_summary="Done.",
-			trajectory={
-				"thought_0": "Read file",
-				"tool_name_0": "read",
-				"tool_args_0": {"target": "trace"},
-				"observation_0": "contents",
-			},
-		)
-		monkeypatch.setattr(
-			"lerim.server.runtime.ExtractAgent",
-			lambda **kw: MagicMock(return_value=pred),
+		_patch_pydantic_sync(
+			monkeypatch,
+			finalize=FinalizeResult(
+				completion_summary="Done.",
+				index_ok=True,
+				summary_filename="20260410-run.md",
+			),
 		)
 
 		result = rt.sync(
@@ -429,12 +448,15 @@ class TestSyncFlow:
 		assert (run_folder / "agent.log").exists()
 		assert (run_folder / "agent_trace.json").exists()
 
-		# Verify trace content
+		# agent.log should carry the completion summary.
+		log_content = (run_folder / "agent.log").read_text(encoding="utf-8")
+		assert "Done." in log_content
+
+		# agent_trace.json is a placeholder JSON list in Phase 2.
 		trace_data = json.loads(
 			(run_folder / "agent_trace.json").read_text(encoding="utf-8")
 		)
-		assert len(trace_data) == 3
-		assert trace_data[0]["content"] == "Read file"
+		assert isinstance(trace_data, list)
 
 
 # ---------------------------------------------------------------------------

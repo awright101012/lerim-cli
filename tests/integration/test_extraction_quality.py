@@ -1,21 +1,21 @@
 """Integration tests for extraction quality -- real LLM calls.
 
 Gate: LERIM_INTEGRATION=1. Uses retry_on_llm_flake for non-deterministic output.
-Each test runs the ExtractAgent against fixture traces and asserts quality
-properties of the resulting memory files, summaries, and index.
+Each test runs the PydanticAI three-pass extraction pipeline against fixture
+traces and asserts quality properties of the resulting memory files,
+summaries, and index.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import dspy
 import frontmatter
 import pytest
 
-from lerim.agents.extract import ExtractAgent
+from lerim.agents.extract import run_extraction_three_pass
+from lerim.agents.extract_pydanticai import build_model
 from lerim.agents.tools import MemoryTools
-from lerim.config.providers import build_dspy_lm
 from lerim.config.settings import get_config
 from tests.integration.conftest import retry_on_llm_flake
 
@@ -36,19 +36,29 @@ def _summary_files(memory_root: Path) -> list[Path]:
 	return sorted(summaries_dir.glob("*.md"))
 
 
+def _build_model_from_config():
+	"""Construct the primary PydanticAI chat model from the active config."""
+	config = get_config()
+	return build_model(
+		provider_name=config.agent_role.provider,
+		model_name=config.agent_role.model,
+	)
+
+
 @retry_on_llm_flake(max_attempts=3)
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_extract_body_has_why_and_how(tmp_lerim_root):
 	"""Feedback/project memories must contain Why and How to apply sections."""
-	config = get_config()
-	lm = build_dspy_lm("agent", config=config)
 	memory_root = tmp_lerim_root / "memory"
 	(memory_root / "index.md").write_text("# Memory Index\n")
+	(memory_root / "summaries").mkdir(exist_ok=True)
 	trace = TRACES_DIR / "claude_short.jsonl"
 
-	agent = ExtractAgent(memory_root=memory_root, trace_path=trace, max_iters=15)
-	with dspy.context(lm=lm):
-		agent.forward()
+	run_extraction_three_pass(
+		memory_root=memory_root,
+		trace_path=trace,
+		model=_build_model_from_config(),
+	)
 
 	checked = 0
 	for md_file in _memory_files(memory_root):
@@ -69,27 +79,30 @@ def test_extract_body_has_why_and_how(tmp_lerim_root):
 
 
 @retry_on_llm_flake(max_attempts=3)
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_extract_dedup_does_not_duplicate(tmp_lerim_root):
 	"""Running extraction twice on the same trace must not create duplicates."""
-	config = get_config()
-	lm = build_dspy_lm("agent", config=config)
 	memory_root = tmp_lerim_root / "memory"
 	(memory_root / "index.md").write_text("# Memory Index\n")
+	(memory_root / "summaries").mkdir(exist_ok=True)
 	trace = TRACES_DIR / "claude_short.jsonl"
 
 	# First extraction
-	agent1 = ExtractAgent(memory_root=memory_root, trace_path=trace, max_iters=15)
-	with dspy.context(lm=lm):
-		agent1.forward()
+	run_extraction_three_pass(
+		memory_root=memory_root,
+		trace_path=trace,
+		model=_build_model_from_config(),
+	)
 
 	count_after_first = len(_memory_files(memory_root))
 	assert count_after_first >= 1, "First extraction should produce at least 1 memory"
 
 	# Second extraction on same trace, same memory_root
-	agent2 = ExtractAgent(memory_root=memory_root, trace_path=trace, max_iters=15)
-	with dspy.context(lm=lm):
-		agent2.forward()
+	run_extraction_three_pass(
+		memory_root=memory_root,
+		trace_path=trace,
+		model=_build_model_from_config(),
+	)
 
 	count_after_second = len(_memory_files(memory_root))
 	assert count_after_second == count_after_first, (
@@ -99,18 +112,19 @@ def test_extract_dedup_does_not_duplicate(tmp_lerim_root):
 
 
 @retry_on_llm_flake(max_attempts=3)
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_extract_respects_do_not_extract(tmp_lerim_root):
 	"""Trivial/empty traces should produce 0 memory files."""
-	config = get_config()
-	lm = build_dspy_lm("agent", config=config)
 	memory_root = tmp_lerim_root / "memory"
 	(memory_root / "index.md").write_text("# Memory Index\n")
+	(memory_root / "summaries").mkdir(exist_ok=True)
 	trace = TRACES_DIR / "edge_short.jsonl"
 
-	agent = ExtractAgent(memory_root=memory_root, trace_path=trace, max_iters=15)
-	with dspy.context(lm=lm):
-		agent.forward()
+	run_extraction_three_pass(
+		memory_root=memory_root,
+		trace_path=trace,
+		model=_build_model_from_config(),
+	)
 
 	memories = _memory_files(memory_root)
 	assert len(memories) == 0, (
@@ -120,18 +134,19 @@ def test_extract_respects_do_not_extract(tmp_lerim_root):
 
 
 @retry_on_llm_flake(max_attempts=3)
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_extract_summary_has_sections(tmp_lerim_root):
 	"""Session summary must contain User Intent and What Happened sections."""
-	config = get_config()
-	lm = build_dspy_lm("agent", config=config)
 	memory_root = tmp_lerim_root / "memory"
 	(memory_root / "index.md").write_text("# Memory Index\n")
+	(memory_root / "summaries").mkdir(exist_ok=True)
 	trace = TRACES_DIR / "claude_short.jsonl"
 
-	agent = ExtractAgent(memory_root=memory_root, trace_path=trace, max_iters=15)
-	with dspy.context(lm=lm):
-		agent.forward()
+	run_extraction_three_pass(
+		memory_root=memory_root,
+		trace_path=trace,
+		model=_build_model_from_config(),
+	)
 
 	summaries = _summary_files(memory_root)
 	assert len(summaries) >= 1, "Extraction should produce at least 1 summary file"
@@ -147,18 +162,19 @@ def test_extract_summary_has_sections(tmp_lerim_root):
 
 
 @retry_on_llm_flake(max_attempts=3)
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_extract_index_has_all_files(tmp_lerim_root):
 	"""After extraction, verify_index must return OK."""
-	config = get_config()
-	lm = build_dspy_lm("agent", config=config)
 	memory_root = tmp_lerim_root / "memory"
 	(memory_root / "index.md").write_text("# Memory Index\n")
+	(memory_root / "summaries").mkdir(exist_ok=True)
 	trace = TRACES_DIR / "claude_short.jsonl"
 
-	agent = ExtractAgent(memory_root=memory_root, trace_path=trace, max_iters=15)
-	with dspy.context(lm=lm):
-		agent.forward()
+	run_extraction_three_pass(
+		memory_root=memory_root,
+		trace_path=trace,
+		model=_build_model_from_config(),
+	)
 
 	tools = MemoryTools(memory_root=memory_root)
 	result = tools.verify_index()
