@@ -6,7 +6,14 @@ Single source of truth for role → model construction. Includes:
 - Role validation
 - DSPy LM builders (used by maintain/ask agents)
 - PydanticAI Model builders with HTTP retry + provider fallback (used by
-  the extract three-pass pipeline and the single-pass baseline)
+  the extract single-pass agent)
+
+MiniMax routing (2026-04-12):
+  DSPy path  → OpenAI-compat endpoint (``/v1``, via litellm)
+  PydanticAI → Anthropic-compat endpoint (``/anthropic``, via AnthropicModel)
+MiniMax M2.5's OpenAI-compat layer bleeds native XML into JSON tool-call
+args, causing ~50% schema-validation failures. M2.7 + the Anthropic endpoint
+emits proper ``tool_use`` blocks — this is what OpenClaw uses in production.
 
 Provider base URLs are read from the `[providers]` section of `default.toml`
 (+ optional `~/.lerim/config.toml` override). API keys are resolved from
@@ -21,11 +28,14 @@ from dataclasses import dataclass
 from typing import Literal
 
 import dspy
+from anthropic import AsyncAnthropic
 from httpx import AsyncClient, HTTPStatusError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
-from pydantic_ai.models import Model
+from pydantic_ai.models import Model, ModelSettings
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -44,7 +54,7 @@ PROVIDER_CAPABILITIES: dict[str, dict] = {
 	"minimax": {
 		"roles": ["agent"],
 		"api_key_env": "MINIMAX_API_KEY",
-		"models": ["MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
+		"models": ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
 	},
 	"opencode_go": {
 		"roles": ["agent"],
@@ -331,52 +341,64 @@ def _make_retrying_http_client(
 	return AsyncClient(transport=transport)
 
 
-def _build_model_settings(provider: str, cfg: Config) -> OpenAIChatModelSettings:
-	"""Build PydanticAI model settings from Lerim Config.agent_role.
+def _build_openai_model_settings(provider: str, cfg: Config) -> OpenAIChatModelSettings:
+	"""Build OpenAI-path model settings from Lerim Config.agent_role.
 
-	Threads ``temperature`` and ``max_tokens`` from ``default.toml`` into
-	the PydanticAI path (previously dead fields — only DSPy honored
-	them). Also enables ``parallel_tool_calls=True`` so the model can
-	emit multiple independent tool calls in a single turn (1 LLM round-
-	trip instead of N), which is a big wall-clock win on write/note
-	bursts where each call is logically independent.
-
-	Provider-specific clamping:
-	- MiniMax documents a valid temperature range of ``(0.0, 1.0]``.
-	  Values outside this range produce errors at the API. We clamp to
-	  that window specifically for minimax to prevent a config-time
-	  error from leaking into a runtime agent run. Other providers pass
-	  through unchanged.
-
-	Known sensitivity: with MiniMax-M2.5, the combination of low
-	temperature (e.g. 0.1) and ``retries=3`` previously caused the agent
-	to crash on stochastic tool-call flub bursts because low temperature
-	made the flubs deterministic. The current setup pairs config
-	temperature with ``retries=5`` on the Agent + ``parallel_tool_calls=
-	True`` to absorb both stochastic flubs AND collapse independent
-	calls into one turn. If smoke shows regression, bump ``temperature``
-	in ``default.toml`` instead of reverting this threading.
-
-	We deliberately do NOT set ``extra_body={"reasoning_split": True}``
-	for MiniMax-M2.x, even though the docs expose it, because
-	pydantic_ai does not preserve the resulting ``reasoning_details``
-	field in message history. Setting it would break MiniMax's chain-
-	of-thought continuity across turns. The default behavior (thinking
-	embedded in ``content`` as ``<think>`` tags) is correctly replayed
-	by pydantic_ai verbatim.
+	Used for non-MiniMax providers that go through the OpenAI-compat path.
+	Threads temperature, max_tokens, top_p, parallel_tool_calls from config.
 	"""
 	role_cfg = cfg.agent_role
-	temperature = role_cfg.temperature
-	if provider == "minimax":
-		# Clamp strictly inside (0.0, 1.0] per MiniMax API docs
-		temperature = max(0.01, min(1.0, temperature))
 	return OpenAIChatModelSettings(
-		temperature=temperature,
+		temperature=role_cfg.temperature,
 		top_p=role_cfg.top_p,
 		max_tokens=role_cfg.max_tokens,
 		parallel_tool_calls=role_cfg.parallel_tool_calls,
 		extra_body={"top_k": role_cfg.top_k},
 	)
+
+
+def _build_minimax_anthropic_model(
+	*,
+	model: str,
+	api_key: str,
+	cfg: Config,
+) -> AnthropicModel:
+	"""Build MiniMax model via its Anthropic-compatible endpoint.
+
+	MiniMax M2.7 emits proper Anthropic ``tool_use`` blocks via the
+	``/anthropic`` endpoint. M2.5's tool calling is broken on both
+	endpoints. This is the production path for the extract agent.
+
+	Uses ``AsyncAnthropic(max_retries=5)`` for HTTP-level retries —
+	the Anthropic SDK handles 429/5xx natively.
+
+	The Anthropic base URL is resolved from ``[providers].minimax_anthropic``
+	in config, falling back to ``https://api.minimax.io/anthropic``.
+	"""
+	base_url = _default_api_base("minimax_anthropic", cfg)
+	if not base_url:
+		openai_url = _default_api_base("minimax", cfg)
+		base_url = (
+			openai_url.replace("/v1", "/anthropic")
+			if openai_url
+			else "https://api.minimax.io/anthropic"
+		)
+
+	client = AsyncAnthropic(
+		api_key=api_key,
+		base_url=base_url,
+		max_retries=5,
+	)
+	anthropic_provider = AnthropicProvider(anthropic_client=client)
+	canonical_model = normalize_model_name("minimax", model)
+	role_cfg = cfg.agent_role
+	temperature = max(0.01, min(1.0, role_cfg.temperature))
+	settings = ModelSettings(
+		temperature=temperature,
+		max_tokens=role_cfg.max_tokens,
+		top_p=role_cfg.top_p,
+	)
+	return AnthropicModel(canonical_model, provider=anthropic_provider, settings=settings)
 
 
 def _build_pydantic_model_for_provider(
@@ -386,13 +408,11 @@ def _build_pydantic_model_for_provider(
 	api_base: str,
 	cfg: Config,
 	role_label: str,
-) -> OpenAIChatModel:
-	"""Build a single PydanticAI OpenAI-compatible model with HTTP retry.
+) -> Model:
+	"""Build a single PydanticAI model with HTTP retry.
 
-	Uses the shared Config to resolve API keys, base URLs, AND model
-	settings (temperature, max_tokens) — no hardcoded endpoints. Every
-	provider Lerim supports has an OpenAI-compatible API, so
-	``OpenAIChatModel`` with a ``OpenAIProvider`` works universally.
+	MiniMax → AnthropicModel via /anthropic endpoint (proper tool_use).
+	All others → OpenAIChatModel via OpenAI-compat endpoint.
 	"""
 	provider = provider.strip().lower()
 	validate_provider_for_role(provider, "agent", model)
@@ -408,6 +428,11 @@ def _build_pydantic_model_for_provider(
 				f"missing_api_key:{env_name} required for {role_label}"
 			)
 
+	# MiniMax: Anthropic-compat endpoint for proper tool calling
+	if provider == "minimax":
+		return _build_minimax_anthropic_model(model=model, api_key=api_key, cfg=cfg)
+
+	# All other providers: OpenAI-compat path
 	base_url = api_base or _default_api_base(provider, cfg)
 	if not base_url:
 		raise RuntimeError(
@@ -422,13 +447,13 @@ def _build_pydantic_model_for_provider(
 		http_client=http_client,
 	)
 	canonical_model = normalize_model_name(provider, model)
-	settings = _build_model_settings(provider, cfg)
+	settings = _build_openai_model_settings(provider, cfg)
 	return OpenAIChatModel(canonical_model, provider=openai_provider, settings=settings)
 
 
 def _wrap_with_fallback(
-	primary: OpenAIChatModel,
-	fallbacks: list[OpenAIChatModel],
+	primary: Model,
+	fallbacks: list[Model],
 ) -> Model:
 	"""Return primary alone if no fallbacks, else a FallbackModel wrapping both."""
 	if not fallbacks:
@@ -476,7 +501,7 @@ def build_pydantic_model(
 		role_label=f"roles.{role}.provider={role_cfg.provider}",
 	)
 
-	fallbacks: list[OpenAIChatModel] = []
+	fallbacks: list[Model] = []
 	for raw in role_cfg.fallback_models:
 		try:
 			spec = parse_fallback_spec(raw)
@@ -537,7 +562,7 @@ def build_pydantic_model_from_provider(
 		role_label=f"explicit_provider={provider}",
 	)
 
-	fallbacks: list[OpenAIChatModel] = []
+	fallbacks: list[Model] = []
 	for raw in fallback_models or ():
 		try:
 			spec = parse_fallback_spec(raw)
