@@ -16,11 +16,11 @@ Override the test LLM: `LERIM_TEST_PROVIDER=openrouter LERIM_TEST_MODEL=openai/g
 
 ### Unit (`tests/unit/`, ~1189 tests)
 
-Fast, deterministic, no LLM, no network. Covers session adapters (Claude, Codex, Cursor, OpenCode), memory layout and storage, config loading and merging, CLI parsing, dashboard API helpers, MemoryTools boundary checks, provider construction, cost tracking, job queue, transcript parsing, and regression contracts for public API surfaces.
+Fast, deterministic, no LLM, no network. Covers session adapters (Claude, Codex, Cursor, OpenCode), memory layout and storage, config loading and merging, CLI parsing, dashboard API helpers, memory tool-function boundary checks, provider construction, cost tracking, job queue, transcript parsing, and regression contracts for public API surfaces.
 
 ### Smoke (`tests/smoke/test_agent_smoke.py`, 4 tests)
 
-Quick LLM sanity checks for maintain and ask. Verifies `MaintainAgent` runs on seeded and empty stores without crashing and `AskAgent` answers questions or reports no memories. Sync (extract) is no longer covered here — it moved to the PydanticAI three-pass pipeline; e2e and the eval harness cover it. Gate: `LERIM_SMOKE=1`.
+Quick LLM sanity checks for maintain and ask. Verifies `run_maintain(...)` runs on seeded and empty stores without crashing and `run_ask(...)` answers questions or reports no memories. Sync (extract) is no longer covered here — e2e and the eval harness cover it. Gate: `LERIM_SMOKE=1`.
 
 ### Integration (`tests/integration/`, 11 tests)
 
@@ -33,8 +33,8 @@ Full agent flows as a user would invoke them. Files: `test_sync_flow.py`, `test_
 ## Architecture Under Test
 
 - **Sync**: PydanticAI single-pass extraction agent `run_extraction(memory_root, trace_path, model, run_folder)` — one `pydantic_ai.Agent` with 8 tools (read/grep/scan/note/prune/write/edit/verify_index) and 3 history processors (context pressure, notes state, prune rewriter). Request budget auto-scales from trace size via `compute_request_budget`.
-- **Agents (DSPy)**: `MaintainAgent`, `AskAgent` -- still DSPy ReAct modules taking `Path` args directly (no RuntimeContext).
-- **Tools**: `MemoryTools` class with 7 methods: `read`, `grep`, `scan`, `write`, `edit`, `archive`, `verify_index`. Extract uses six standalone async tool functions from `lerim.agents.extract` that adapt calls onto `MemoryTools`.
+- **Agents**: `run_extraction`, `run_maintain`, and `run_ask` are PydanticAI flows using the same model role.
+- **Tools**: module-level tool functions in `lerim.agents.tools` (`read`, `grep`, `scan`, `write`, `edit`, `archive`, `verify_index`, plus `note`/`prune` for extraction state control).
 - **Config**: single `[roles.agent]` role (no separate extract_role).
 - **Memory**: 3-field frontmatter (`name`, `description`, `type`), `index.md`, `summaries/` with date-prefixed files.
 - **No** explorer subagent, no windowing pipeline.

@@ -126,10 +126,10 @@ Alternative to Docker:
 lerim serve
 ```
 
-## Cloud UI
+## Web UI
 
-Use [Lerim Cloud](https://lerim.dev) for web UI.
-`lerim dashboard` prints the Cloud link and CLI alternatives.
+Web UI is not bundled in this repo yet.
+Use `lerim dashboard` for current status and CLI alternatives.
 
 ## Docs
 

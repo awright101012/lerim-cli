@@ -44,6 +44,7 @@ from lerim.sessions.catalog import (
     count_session_jobs_by_status,
     latest_service_run,
     list_queue_jobs,
+    queue_health_snapshot,
     retry_session_job,
     skip_session_job,
 )
@@ -218,7 +219,11 @@ def api_health() -> dict[str, Any]:
 
 
 def api_ask(question: str, limit: int = 12) -> dict[str, Any]:
-    """Run one ask query against the runtime agent and return result dict."""
+    """Run one ask query against the runtime agent and return result dict.
+
+    The ``limit`` argument is accepted for API compatibility and ignored.
+    """
+    _ = limit
     config = get_config()
     memory_root = str(config.memory_dir)
     agent = LerimRuntime()
@@ -268,7 +273,14 @@ def api_sync(
             window_start=window_start,
             window_end=window_end,
         )
-    return {"code": code, **asdict(summary)}
+    queue_health = queue_health_snapshot()
+    payload: dict[str, Any] = {"code": code, **asdict(summary), "queue_health": queue_health}
+    if queue_health.get("degraded"):
+        payload["warning"] = (
+            "Queue degraded. "
+            + str(queue_health.get("advice") or "Run `lerim queue --failed`.")
+        )
+    return payload
 
 
 def api_maintain(force: bool = False, dry_run: bool = False) -> dict[str, Any]:
@@ -276,7 +288,14 @@ def api_maintain(force: bool = False, dry_run: bool = False) -> dict[str, Any]:
     config = get_config()
     with ollama_lifecycle(config):
         code, payload = run_maintain_once(force=force, dry_run=dry_run)
-    return {"code": code, **payload}
+    queue_health = queue_health_snapshot()
+    result: dict[str, Any] = {"code": code, **payload, "queue_health": queue_health}
+    if queue_health.get("degraded"):
+        result["warning"] = (
+            "Queue degraded. "
+            + str(queue_health.get("advice") or "Run `lerim queue --failed`.")
+        )
+    return result
 
 
 def api_status() -> dict[str, Any]:
@@ -287,15 +306,26 @@ def api_status() -> dict[str, Any]:
         if config.memory_dir.exists()
         else 0
     )
+    latest_sync = latest_service_run("sync")
+    latest_maintain = latest_service_run("maintain")
+    queue = count_session_jobs_by_status()
+    queue_health = queue_health_snapshot()
+    latest_sync_details = (latest_sync or {}).get("details") or {}
+
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "connected_agents": list(config.agents.keys()),
         "platforms": list_platforms(config.platforms_path),
         "memory_count": memory_count,
         "sessions_indexed_count": count_fts_indexed(),
-        "queue": count_session_jobs_by_status(),
-        "latest_sync": latest_service_run("sync"),
-        "latest_maintain": latest_service_run("maintain"),
+        "queue": queue,
+        "queue_health": queue_health,
+        "scope": {
+            "strict_project_only": True,
+            "skipped_unscoped": int(latest_sync_details.get("skipped_unscoped") or 0),
+        },
+        "latest_sync": latest_sync,
+        "latest_maintain": latest_maintain,
     }
 
 
@@ -570,7 +600,6 @@ services:
     mem_limit: 2g
     tmpfs:
       - /tmp:size=100M
-      - {home}/.dspy_cache:size=50M
       - {home}/.codex:size=50M
       - {home}/.config:size=10M
       - /root/.codex:size=50M

@@ -239,6 +239,24 @@ def test_api_sync_force_flag(monkeypatch, tmp_path) -> None:
 	assert captured_kwargs["force"] is True
 
 
+def test_api_sync_includes_queue_health_warning(monkeypatch, tmp_path) -> None:
+	"""Sync API response surfaces degraded queue warning hints."""
+	cfg = make_config(tmp_path)
+	monkeypatch.setattr(api_mod, "get_config", lambda: cfg)
+	monkeypatch.setattr(
+		api_mod, "run_sync_once", lambda **kw: (0, SyncSummary(0, 0, 0, 0, []))
+	)
+	monkeypatch.setattr(api_mod, "ollama_lifecycle", _noop_lifecycle)
+	monkeypatch.setattr(
+		api_mod,
+		"queue_health_snapshot",
+		lambda: {"degraded": True, "advice": "run `lerim queue --failed`"},
+	)
+	result = api_sync()
+	assert result["queue_health"]["degraded"] is True
+	assert "warning" in result
+
+
 # ---------------------------------------------------------------------------
 # api_maintain
 # ---------------------------------------------------------------------------
@@ -280,6 +298,24 @@ def test_api_maintain_dry_run(monkeypatch, tmp_path) -> None:
 	assert captured["dry_run"] is True
 
 
+def test_api_maintain_includes_queue_health_warning(monkeypatch, tmp_path) -> None:
+	"""Maintain API response surfaces degraded queue warning hints."""
+	cfg = make_config(tmp_path)
+	monkeypatch.setattr(api_mod, "get_config", lambda: cfg)
+	monkeypatch.setattr(
+		api_mod, "run_maintain_once", lambda **kw: (0, {"projects": {}})
+	)
+	monkeypatch.setattr(api_mod, "ollama_lifecycle", _noop_lifecycle)
+	monkeypatch.setattr(
+		api_mod,
+		"queue_health_snapshot",
+		lambda: {"degraded": True, "advice": "run `lerim queue --failed`"},
+	)
+	result = api_maintain()
+	assert result["queue_health"]["degraded"] is True
+	assert "warning" in result
+
+
 # ---------------------------------------------------------------------------
 # api_status
 # ---------------------------------------------------------------------------
@@ -299,6 +335,17 @@ def test_api_status_returns_expected_keys(monkeypatch, tmp_path) -> None:
 		lambda: {"pending": 0, "done": 3},
 	)
 	monkeypatch.setattr(api_mod, "latest_service_run", lambda svc: None)
+	monkeypatch.setattr(
+		api_mod, "queue_health_snapshot",
+		lambda: {
+			"degraded": False,
+			"stale_running_count": 0,
+			"dead_letter_count": 0,
+			"oldest_running_age_seconds": None,
+			"oldest_dead_letter_age_seconds": None,
+			"advice": "",
+		},
+	)
 
 	result = api_status()
 
@@ -308,6 +355,8 @@ def test_api_status_returns_expected_keys(monkeypatch, tmp_path) -> None:
 	assert result["memory_count"] == 1
 	assert result["sessions_indexed_count"] == 5
 	assert result["queue"] == {"pending": 0, "done": 3}
+	assert "queue_health" in result
+	assert result["scope"]["strict_project_only"] is True
 
 
 def test_api_status_no_memory_dir(monkeypatch, tmp_path) -> None:
@@ -320,9 +369,39 @@ def test_api_status_no_memory_dir(monkeypatch, tmp_path) -> None:
 		api_mod, "count_session_jobs_by_status", lambda: {}
 	)
 	monkeypatch.setattr(api_mod, "latest_service_run", lambda svc: None)
+	monkeypatch.setattr(
+		api_mod, "queue_health_snapshot",
+		lambda: {
+			"degraded": False,
+			"stale_running_count": 0,
+			"dead_letter_count": 0,
+			"oldest_running_age_seconds": None,
+			"oldest_dead_letter_age_seconds": None,
+			"advice": "",
+		},
+	)
 
 	result = api_status()
 	assert result["memory_count"] == 0
+
+
+def test_api_status_scope_skipped_unscoped_from_latest_sync(monkeypatch, tmp_path) -> None:
+	"""Status exposes strict-scope skipped counter from latest sync details."""
+	cfg = make_config(tmp_path)
+	monkeypatch.setattr(api_mod, "get_config", lambda: cfg)
+	monkeypatch.setattr(api_mod, "list_platforms", lambda path: [])
+	monkeypatch.setattr(api_mod, "count_fts_indexed", lambda: 0)
+	monkeypatch.setattr(api_mod, "count_session_jobs_by_status", lambda: {})
+	monkeypatch.setattr(
+		api_mod,
+		"latest_service_run",
+		lambda svc: {"details": {"skipped_unscoped": 7}} if svc == "sync" else None,
+	)
+	monkeypatch.setattr(
+		api_mod, "queue_health_snapshot", lambda: {"degraded": False, "advice": ""}
+	)
+	result = api_status()
+	assert result["scope"]["skipped_unscoped"] == 7
 
 
 # ---------------------------------------------------------------------------

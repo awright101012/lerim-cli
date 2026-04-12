@@ -58,10 +58,16 @@ def test_sync_parser_accepts_canonical_flags() -> None:
 
 def test_ask_parser_minimal_surface() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(["ask", "what failed?", "--limit", "5"])
+    args = parser.parse_args(["ask", "what failed?"])
     assert args.command == "ask"
     assert args.question == "what failed?"
-    assert args.limit == 5
+
+
+def test_ask_parser_rejects_limit_flag() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["ask", "what failed?", "--limit", "5"])
+    assert exc.value.code == 2
 
 
 def test_removed_command_rejected() -> None:
@@ -103,7 +109,7 @@ def test_ask_forwards_to_api(monkeypatch: pytest.MonkeyPatch) -> None:
         "error": False,
     }
     monkeypatch.setattr(cli, "_api_post", lambda _path, _body: fake_response)
-    code, payload = run_cli_json(["ask", "how to deploy", "--limit", "5", "--json"])
+    code, payload = run_cli_json(["ask", "how to deploy", "--json"])
     assert code == 0
     assert payload["answer"] == "Use bearer tokens."
 

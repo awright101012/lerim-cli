@@ -886,10 +886,6 @@ def _serialize_full_config(config: Config) -> dict[str, Any]:
         }
         if hasattr(role, "fallback_models"):
             base["fallback_models"] = list(role.fallback_models)
-        if hasattr(role, "max_window_tokens"):
-            base["max_window_tokens"] = role.max_window_tokens
-        if hasattr(role, "window_overlap_tokens"):
-            base["window_overlap_tokens"] = role.window_overlap_tokens
         return base
 
     return {
@@ -1337,14 +1333,15 @@ SELECT COUNT(1) AS total FROM session_docs d WHERE 1=1{where_sql}"""
             if not question:
                 self._error(HTTPStatus.BAD_REQUEST, "Missing 'question'")
                 return
-            limit = int(body.get("limit") or 12)
+            # Compatibility only: API still tolerates `limit`, runtime ignores it.
+            _ = body.get("limit")
             import threading
 
             result_holder: list[dict[str, Any]] = []
 
             def _run_ask() -> None:
                 """Execute ask in background thread."""
-                result_holder.append(api_ask(question, limit=limit))
+                result_holder.append(api_ask(question))
 
             thread = threading.Thread(target=_run_ask)
             thread.start()

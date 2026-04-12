@@ -210,6 +210,13 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     if data is None:
         return _not_running()
     _emit_structured(title="Sync:", payload=data, as_json=args.json)
+    if not args.json:
+        queue_health = data.get("queue_health") or {}
+        if queue_health.get("degraded"):
+            _emit("! Queue degraded")
+            advice = str(queue_health.get("advice") or "").strip()
+            if advice:
+                _emit(f"  {advice}")
     return 0
 
 
@@ -223,6 +230,13 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
     if data is None:
         return _not_running()
     _emit_structured(title="Maintain:", payload=data, as_json=args.json)
+    if not args.json:
+        queue_health = data.get("queue_health") or {}
+        if queue_health.get("degraded"):
+            _emit("! Queue degraded")
+            advice = str(queue_health.get("advice") or "").strip()
+            if advice:
+                _emit(f"  {advice}")
     return 0
 
 
@@ -259,7 +273,7 @@ def _cmd_memory_list(args: argparse.Namespace) -> int:
 
 def _cmd_ask(args: argparse.Namespace) -> int:
     """Forward ask query to the running Lerim server."""
-    data = _api_post("/api/ask", {"question": args.question, "limit": args.limit})
+    data = _api_post("/api/ask", {"question": args.question})
     if data is None:
         return _not_running()
     if data.get("error"):
@@ -521,9 +535,24 @@ def _cmd_status(args: argparse.Namespace) -> int:
         _emit(f"- sessions_indexed_count: {data.get('sessions_indexed_count', 0)}")
         queue = data.get("queue", {})
         _emit(f"- queue: {_format_queue_counts(queue)}")
+        scope = data.get("scope", {})
+        skipped_unscoped = int(scope.get("skipped_unscoped") or 0)
+        _emit(f"- skipped_unscoped(last_sync): {skipped_unscoped}")
         dl = queue.get("dead_letter", 0)
         if dl > 0:
             _emit(f"  ! {dl} dead_letter job(s). Run: lerim queue --failed")
+        queue_health = data.get("queue_health", {})
+        if queue_health.get("degraded"):
+            _emit("  ! Queue health degraded")
+            _emit(
+                "    stale_running="
+                f"{int(queue_health.get('stale_running_count') or 0)} "
+                "dead_letter="
+                f"{int(queue_health.get('dead_letter_count') or 0)}"
+            )
+            advice = str(queue_health.get("advice") or "").strip()
+            if advice:
+                _emit(f"    advice: {advice}")
     return 0
 
 
@@ -907,13 +936,18 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from http.server import ThreadingHTTPServer
 
     from lerim.server.httpd import DashboardHandler
-    from lerim.sessions.catalog import init_sessions_db
+    from lerim.sessions.catalog import (
+        init_sessions_db,
+        queue_health_snapshot,
+        reap_stale_running_jobs,
+    )
 
     config = get_config()
     host = args.host or config.server_host or "0.0.0.0"
     port = int(args.port or config.server_port or 8765)
 
     init_sessions_db()
+    reaped_at_startup = reap_stale_running_jobs()
     httpd = ThreadingHTTPServer((host, port), DashboardHandler)
     httpd.timeout = 1.0
 
@@ -935,12 +969,19 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         _now_init = time.monotonic()
         last_sync = _now_init - sync_interval
         last_maintain = _now_init - maintain_interval
+        last_degraded_log_at = 0.0
+        degraded_log_interval_seconds = 300.0
 
         logger.info(
             "daemon loop started (sync every {}s, maintain every {}s)",
             sync_interval,
             maintain_interval,
         )
+        if reaped_at_startup > 0:
+            logger.warning(
+                "recovered {} stale running job(s) at startup",
+                reaped_at_startup,
+            )
 
         while not stop_event.is_set():
             now = time.monotonic()
@@ -1000,6 +1041,19 @@ def _cmd_serve(args: argparse.Namespace) -> int:
                         logger.info("cloud sync: {}", results)
                 except Exception as exc:
                     logger.warning("cloud sync error: {}", exc)
+
+            queue_health = queue_health_snapshot()
+            if (
+                queue_health.get("degraded")
+                and now - last_degraded_log_at >= degraded_log_interval_seconds
+            ):
+                logger.warning(
+                    "queue degraded | stale_running={} dead_letter={} advice={}",
+                    int(queue_health.get("stale_running_count") or 0),
+                    int(queue_health.get("dead_letter_count") or 0),
+                    str(queue_health.get("advice") or ""),
+                )
+                last_degraded_log_at = now
 
             next_sync = last_sync + sync_interval
             next_maintain = last_maintain + maintain_interval
@@ -1308,12 +1362,6 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument(
         "--project", help="Scope to a specific project (not yet implemented)."
     )
-    ask.add_argument(
-        "--limit",
-        type=int,
-        default=12,
-        help="Accepted flag for future retrieval cap behavior (currently not enforced). (default: 12)",
-    )
     ask.set_defaults(func=_cmd_ask)
 
     # ── status ───────────────────────────────────────────────────────
@@ -1538,7 +1586,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_SKIP_TRACING_COMMANDS = frozenset({"auth", "logs", "version", "help", "queue", "retry", "skip"})
+_TRACE_COMMANDS = frozenset({"serve", "sync", "maintain", "ask"})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1547,7 +1595,7 @@ def main(argv: list[str] | None = None) -> int:
     # Determine subcommand early to skip heavy init for lightweight commands.
     first_arg = next((a for a in raw_argv if not a.startswith("-")), None)
     configure_logging()
-    if first_arg not in _SKIP_TRACING_COMMANDS:
+    if first_arg in _TRACE_COMMANDS:
         configure_tracing(get_config())
     parser = build_parser()
     args = parser.parse_args(_hoist_global_json_flag(list(argv or sys.argv[1:])))

@@ -346,6 +346,26 @@ class TestCmdSync:
 			code = cli._cmd_sync(args)
 		assert code == 1
 
+	def test_sync_prints_degraded_queue_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""Human sync output prints degraded queue warning block."""
+		fake = {
+			"indexed": 1,
+			"queue_health": {"degraded": True, "advice": "run `lerim queue --failed`"},
+		}
+		monkeypatch.setattr(cli, "_api_post", lambda _p, _b: fake)
+		args = _ns(
+			command="sync", json=False,
+			agent=None, window=None, max_sessions=None,
+			force=False, dry_run=False,
+		)
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			code = cli._cmd_sync(args)
+		assert code == 0
+		text = buf.getvalue()
+		assert "Queue degraded" in text
+		assert "lerim queue --failed" in text
+
 
 # ===================================================================
 # _cmd_maintain
@@ -375,6 +395,22 @@ class TestCmdMaintain:
 		with redirect_stderr(buf):
 			code = cli._cmd_maintain(args)
 		assert code == 1
+
+	def test_maintain_prints_degraded_queue_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""Human maintain output prints degraded queue warning block."""
+		fake = {
+			"projects": {},
+			"queue_health": {"degraded": True, "advice": "run `lerim queue --failed`"},
+		}
+		monkeypatch.setattr(cli, "_api_post", lambda _p, _b: fake)
+		args = _ns(command="maintain", json=False, force=False, dry_run=False)
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			code = cli._cmd_maintain(args)
+		assert code == 0
+		text = buf.getvalue()
+		assert "Queue degraded" in text
+		assert "lerim queue --failed" in text
 
 
 # ===================================================================
@@ -503,6 +539,32 @@ class TestCmdStatus:
 			code = cli._cmd_status(args)
 		assert code == 0
 		assert "dead_letter" in buf.getvalue()
+
+	def test_status_queue_health_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""Status prints queue-health degraded block and advice."""
+		fake = {
+			"connected_agents": [],
+			"memory_count": 0,
+			"sessions_indexed_count": 0,
+			"queue": {},
+			"scope": {"skipped_unscoped": 2},
+			"queue_health": {
+				"degraded": True,
+				"stale_running_count": 1,
+				"dead_letter_count": 2,
+				"advice": "run `lerim queue --failed`",
+			},
+		}
+		monkeypatch.setattr(cli, "_api_get", lambda _p: fake)
+		args = _ns(command="status", json=False)
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			code = cli._cmd_status(args)
+		assert code == 0
+		text = buf.getvalue()
+		assert "Queue health degraded" in text
+		assert "skipped_unscoped" in text
+		assert "advice" in text
 
 	def test_status_not_running(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Status returns 1 when server is unreachable."""
@@ -1837,6 +1899,22 @@ class TestMain:
 		with redirect_stdout(buf):
 			cli.main(["queue", "--json"])
 		assert len(tracing_called) == 0
+
+	def test_enables_tracing_for_model_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""Model-executing commands (ask) initialize tracing."""
+		tracing_called = []
+		monkeypatch.setattr(cli, "configure_logging", lambda: None)
+		monkeypatch.setattr(cli, "configure_tracing", lambda _cfg: tracing_called.append(1))
+		monkeypatch.setattr(
+			cli,
+			"_api_post",
+			lambda _path, _body: {"answer": "ok", "error": False},
+		)
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			code = cli.main(["ask", "hello"])
+		assert code == 0
+		assert len(tracing_called) == 1
 
 	def test_unknown_command_rejected(self) -> None:
 		"""Unknown commands exit with code 2."""

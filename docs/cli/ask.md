@@ -12,7 +12,7 @@ One-shot query: ask Lerim a question and get an answer informed by memories extr
 ## Syntax
 
 ```bash
-lerim ask <question> [--limit N] [--project NAME] [--json]
+lerim ask <question> [--project NAME] [--json]
 ```
 
 ## Parameters
@@ -24,15 +24,6 @@ lerim ask <question> [--limit N] [--project NAME] [--json]
     <span class="param-badge required">required</span>
   </div>
   <p class="param-desc">Your question (use quotes if it contains spaces).</p>
-</div>
-
-<div class="param-field">
-  <div class="param-header">
-    <span class="param-name">--limit</span>
-    <span class="param-type">integer</span>
-    <span class="param-badge default">default: 12</span>
-  </div>
-  <p class="param-desc">Accepted for forward compatibility. Current runtime accepts the flag but does not enforce a retrieval cap yet.</p>
 </div>
 
 <div class="param-field">
@@ -70,14 +61,6 @@ for API requests. This pattern was chosen for its simplicity and
 compatibility with standard HTTP clients.
 ```
 
-### Limit flag (current behavior)
-
-`--limit` is accepted today for CLI/API compatibility, but retrieval capping is not enforced yet:
-
-```bash
-lerim ask "How is the database configured?" --limit 5
-```
-
 ### JSON output
 
 Get structured output for parsing:
@@ -102,9 +85,8 @@ lerim ask "What testing framework do we use?" --json
 
 1. Your question is sent to the running Lerim server via HTTP POST to `/api/ask`
 2. Lerim asks the PydanticAI ask agent to scan/read relevant memory files
-3. `--limit` is accepted but not currently wired to enforce retrieval count
-4. The model generates an answer grounded in the memory files it read
-5. The answer is returned as plain text (or JSON with metadata using `--json`)
+3. The model generates an answer grounded in the memory files it read
+4. The answer is returned as plain text (or JSON with metadata using `--json`)
 
 !!! tip
     For best results, ask specific questions about decisions, patterns, or procedures in your project.
@@ -141,5 +123,4 @@ lerim ask "What testing framework do we use?" --json
 
 - Ask uses memory scan/read tools to ground its answers in local memory files
 - If provider auth fails (missing API key), the CLI returns exit code 1
-- `--limit` is currently a no-op (reserved for retrieval-cap behavior)
 - The `--project` flag is reserved for future project-scoped queries

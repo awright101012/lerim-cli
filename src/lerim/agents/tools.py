@@ -95,6 +95,16 @@ class Finding(BaseModel):
 			"conclusion."
 		)
 	)
+	level: str = Field(
+		description=(
+			"Signal level: 'decision' for architecture/tech choices, "
+			"'preference' for user preferences/working style, "
+			"'feedback' for corrections or confirmations, "
+			"'reference' for external system pointers, "
+			"'implementation' for code details/debugging/task execution "
+			"(implementation findings are noted for context but never become memories)"
+		)
+	)
 
 
 # ── Deps ─────────────────────────────────────────────────────────────────
@@ -180,6 +190,26 @@ def _normalize_whitespace(text: str) -> str:
 		re.sub(r"^[ \t]+", lambda m: " " * len(m.group().replace("\t", "    ")), line).rstrip()
 		for line in lines
 	)
+
+
+def build_test_ctx(
+	*,
+	memory_root: Path,
+	trace_path: Path | None = None,
+	run_folder: Path | None = None,
+) -> Any:
+	"""Build a minimal RunContext-like object for direct tool unit tests.
+
+	PydanticAI constructs a full RunContext during real agent runs. Tests that
+	call module-level tool functions directly only need `ctx.deps`, so we return
+	a tiny object with that attribute.
+	"""
+	deps = ExtractDeps(
+		memory_root=Path(memory_root),
+		trace_path=Path(trace_path) if trace_path else None,
+		run_folder=Path(run_folder) if run_folder else None,
+	)
+	return SimpleNamespace(deps=deps)
 
 
 # ── Tool functions (single source of truth) ─────────────────────────────
@@ -600,6 +630,35 @@ def write(ctx: RunContext[ExtractDeps], type: str, name: str, description: str, 
 	if not body or not body.strip():
 		return "Error: body cannot be empty"
 
+	# --- Warn about code-level content in memory bodies ---
+	if type != "summary":
+		path_refs = re.findall(r'(?:src/|tests/|\.py\b|\.ts\b|\.js\b|function\s+\w+\()', body)
+		if len(path_refs) >= 2:
+			return (
+				f"Warning: body contains {len(path_refs)} code-level references "
+				f"({', '.join(path_refs[:3])}). Memories should describe decisions "
+				f"and preferences at a conceptual level, not reference specific files "
+				f"or functions. Rewrite the body without file paths, or skip this "
+				f"memory if the content is code-derivable."
+			)
+
+	# --- Require Why/How sections in feedback and project memories ---
+	if type in ("feedback", "project"):
+		has_why = "**Why:**" in body or "**why:**" in body
+		has_how = "**How to apply:**" in body or "**how to apply:**" in body
+		if not has_why or not has_how:
+			missing = []
+			if not has_why:
+				missing.append("**Why:**")
+			if not has_how:
+				missing.append("**How to apply:**")
+			return (
+				f"Warning: {type} memory body is missing {' and '.join(missing)}. "
+				f"feedback/project memories must include **Why:** (rationale) and "
+				f"**How to apply:** (concrete action). Add these sections or skip "
+				f"this memory."
+			)
+
 	# --- Generate filename and target path ---
 	slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")[:128]
 
@@ -945,8 +1004,17 @@ def notes_state_injector(
 		theme_list = ", ".join(
 			f"'{theme}' ({count})" for theme, count in theme_counts.most_common()
 		)
+		n_impl = sum(
+			1 for f in notes
+			if hasattr(f, "level") and (
+				"implementation" in (f.level or "").lower()
+				or "impl" in (f.level or "").lower()
+			)
+		)
+		n_durable = len(notes) - n_impl
 		label = (
-			f"NOTES: {len(notes)} findings across "
+			f"NOTES: {len(notes)} findings ({n_durable} durable, "
+			f"{n_impl} implementation) across "
 			f"{len(theme_counts)} theme(s) — {theme_list}"
 		)
 	_inject_system_message(messages, label)

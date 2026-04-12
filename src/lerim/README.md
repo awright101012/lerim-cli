@@ -13,7 +13,7 @@ The package is organized by feature boundary:
 - `memory/`: memory layout and repo-scoped paths (`repo.py`), trace formatting helpers (`transcript.py`)
 - `sessions/`: session catalog and queue state (`catalog.py`)
 - `adapters/`: session readers for Claude, Codex, Cursor, OpenCode
-- `cloud/`: Lerim Cloud integration (`auth.py`, `shipper.py`)
+- `cloud/`: hosted auth/shipper integration (`auth.py`, `shipper.py`)
 - `skills/`: bundled skill markdown files
 
 ## How to use

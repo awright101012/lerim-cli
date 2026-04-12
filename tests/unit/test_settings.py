@@ -321,17 +321,17 @@ def test_agent_role_explicit_overrides():
     assert role.model == "claude-3"
 
 
-def test_dspy_role_explicit_windowing():
-    """_build_role uses explicit windowing values when set."""
+def test_agent_role_explicit_request_limits():
+    """_build_role uses explicit maintain/ask request limits when set."""
     role = _build_role(
         {
             "provider": "ollama",
             "model": "qwen3:8b",
-            "max_window_tokens": 50000,
-            "window_overlap_tokens": 2000,
+            "max_iters_maintain": 15,
+            "max_iters_ask": 6,
         },
         default_provider="openrouter",
         default_model="default",
     )
-    assert role.max_window_tokens == 50000
-    assert role.window_overlap_tokens == 2000
+    assert role.max_iters_maintain == 15
+    assert role.max_iters_ask == 6

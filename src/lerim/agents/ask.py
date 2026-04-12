@@ -1,6 +1,6 @@
-"""Ask agent: search memories and answer questions.
+"""Ask agent: search memories and answer questions with citations.
 
-question -> dspy.ReAct(AskSignature, tools) -> answer with citations.
+PydanticAI implementation that reads memory files via the shared tool surface.
 """
 
 from __future__ import annotations
@@ -8,23 +8,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import dspy
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+from pydantic_ai.models import Model
+from pydantic_ai.usage import UsageLimits
 
-from lerim.agents.tools import MemoryTools
+from lerim.agents.tools import ExtractDeps, read, scan
 
 
 # ---------------------------------------------------------------------------
-# Input formatter for AskSignature.hints
+# Input formatter for ask hints
 # ---------------------------------------------------------------------------
+
 
 def format_ask_hints(
 	hits: list[dict[str, Any]],
 	context_docs: list[dict[str, Any]],
 ) -> str:
-	"""Format pre-fetched hits and context docs into a hints string.
-
-	Returns a combined text block suitable for the AskSignature.hints field.
-	"""
+	"""Format pre-fetched hits and context docs into a hints string."""
 	context_lines = [
 		(
 			f"- [{fm.get('type', '?')}] {fm.get('name', '?')}: "
@@ -55,71 +56,79 @@ Context docs:
 {context_doc_block}"""
 
 
-class AskSignature(dspy.Signature):
+ASK_SYSTEM_PROMPT = """\
+<role>You are a memory query agent. You answer user questions by searching
+and reading the memory store.</role>
+
+<task>Find relevant memories, read them, and answer the question with
+evidence and citations.</task>
+
+<context>
+Memory layout:
+- {type}_{topic}.md -- memory files (feedback_, project_, user_, reference_)
+- summaries/*.md -- session summaries (date-prefixed)
+- index.md -- semantic index organized by section
+Each memory file has YAML frontmatter (name, description, type) and markdown body.
+</context>
+
+<steps>
+<step name="scan">Call scan() to see all memories (filename, description,
+modified time). Filenames encode type and topic.</step>
+<step name="read">Based on the question and descriptions, call read() on
+relevant memories.</step>
+<step name="answer">Answer with evidence, citing the filenames you used.</step>
+</steps>
+
+<completeness_contract>
+If relevant memories exist, cite them in your answer.
+If no relevant memories exist, say so clearly.
+</completeness_contract>
+"""
+
+
+class AskResult(BaseModel):
+	"""Structured output for the ask flow."""
+
+	answer: str = Field(description="Answer text with filename citations when available")
+
+
+def build_ask_agent(model: Model) -> Agent[ExtractDeps, AskResult]:
+	"""Build Ask agent with read-only memory tools."""
+	return Agent(
+		model,
+		deps_type=ExtractDeps,
+		output_type=AskResult,
+		system_prompt=ASK_SYSTEM_PROMPT,
+		tools=[read, scan],
+		retries=5,
+		output_retries=2,
+	)
+
+
+def run_ask(
+	*,
+	memory_root: Path,
+	model: Model,
+	question: str,
+	hints: str = "",
+	request_limit: int = 30,
+	return_messages: bool = False,
+):
+	"""Run the ask agent.
+
+	Returns AskResult, or (AskResult, list[ModelMessage]) when return_messages=True.
 	"""
-	<role>You are a memory query agent. You answer user questions by searching
-	and reading the memory store.</role>
-
-	<task>Find relevant memories, read them, and answer the question with
-	evidence and citations.</task>
-
-	<context>
-	Memory layout:
-	- {type}_{topic}.md -- memory files (feedback_, project_, user_, reference_)
-	- summaries/*.md -- session summaries (date-prefixed)
-	- index.md -- semantic index organized by section
-	Each memory file has YAML frontmatter (name, description, type) and markdown body.
-	</context>
-
-	<steps>
-	<step name="scan">Call scan() to see all memories (filename, description,
-	modified time). Filenames encode type and topic.</step>
-	<step name="read">Based on the question and descriptions, call read() on
-	relevant memories.</step>
-	<step name="answer">Answer with evidence, citing the filenames you used.</step>
-	</steps>
-
-	<completeness_contract>
-	If relevant memories exist, cite them in your answer.
-	If no relevant memories exist, say so clearly.
-	</completeness_contract>
-
-	"""
-
-	question: str = dspy.InputField(
-		desc="The user's question to answer"
+	agent = build_ask_agent(model)
+	deps = ExtractDeps(memory_root=memory_root)
+	prompt = (
+		f"Question:\n{question.strip()}\n\n"
+		f"Hints:\n{hints.strip() or '(no hints)'}"
 	)
-	hints: str = dspy.InputField(
-		desc="Pre-fetched context (may be empty)"
+	result = agent.run_sync(
+		prompt,
+		deps=deps,
+		usage_limits=UsageLimits(request_limit=max(1, int(request_limit))),
 	)
-	answer: str = dspy.OutputField(
-		desc="Answer citing memory filenames"
-	)
-
-
-class AskAgent(dspy.Module):
-	"""DSPy ReAct module for the ask flow. Independently optimizable."""
-
-	def __init__(self, memory_root: Path, max_iters: int = 30):
-		super().__init__()
-		self.tools = MemoryTools(memory_root=memory_root)
-		self.react = dspy.ReAct(
-			AskSignature,
-			tools=[
-				self.tools.read,
-				self.tools.scan,
-			],
-			max_iters=max_iters,
-		)
-
-	def forward(
-		self,
-		question: str,
-		hints: str,
-	) -> dspy.Prediction:
-		adapter = dspy.ChatAdapter(use_native_function_calling=True)
-		with dspy.context(adapter=adapter):
-			return self.react(
-				question=question,
-				hints=hints,
-			)
+	if return_messages:
+		return result.output, list(result.all_messages())
+	return result.output

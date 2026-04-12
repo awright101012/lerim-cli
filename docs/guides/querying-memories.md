@@ -60,19 +60,10 @@ lerim ask "Why did we choose Postgres over SQLite?"
 The ask flow retrieves relevant memories, uses them as context, and returns
 a natural language answer with evidence of which memories were consulted.
 
-### Limit context
-
-The flag is accepted for compatibility, but retrieval capping is not enforced yet:
-
-```bash
-lerim ask "What auth pattern do we use?" --limit 5
-```
-
 | Flag | Default | Description |
 |------|---------|-------------|
 | `question` | required | Your question (quote if it contains spaces) |
 | `--project` | -- | Scope to a specific project (not yet implemented) |
-| `--limit` | `12` | Accepted flag; retrieval cap behavior is not enforced yet |
 
 ### JSON output
 

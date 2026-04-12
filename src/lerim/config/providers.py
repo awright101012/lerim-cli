@@ -1,19 +1,14 @@
-"""Provider builders for DSPy and PydanticAI pipelines and shared utilities.
+"""Provider builders for PydanticAI pipelines and shared utilities.
 
 Single source of truth for role → model construction. Includes:
 - Provider capability registry (env var names, known models)
 - Model name normalization per provider
 - Role validation
-- DSPy LM builders (used by maintain/ask agents)
-- PydanticAI Model builders with HTTP retry + provider fallback (used by
-  the extract single-pass agent)
+- PydanticAI model builders with HTTP retry + provider fallback
 
 MiniMax routing (2026-04-12):
-  DSPy path  → OpenAI-compat endpoint (``/v1``, via litellm)
-  PydanticAI → Anthropic-compat endpoint (``/anthropic``, via AnthropicModel)
-MiniMax M2.5's OpenAI-compat layer bleeds native XML into JSON tool-call
-args, causing ~50% schema-validation failures. M2.7 + the Anthropic endpoint
-emits proper ``tool_use`` blocks — this is what OpenClaw uses in production.
+  PydanticAI uses the Anthropic-compatible endpoint (``/anthropic``) for
+  robust tool-use emission.
 
 Provider base URLs are read from the `[providers]` section of `default.toml`
 (+ optional `~/.lerim/config.toml` override). API keys are resolved from
@@ -27,7 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-import dspy
 from anthropic import AsyncAnthropic
 from httpx import AsyncClient, HTTPStatusError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
@@ -40,10 +34,9 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from lerim.config.settings import Config, RoleConfig, get_config
+from lerim.config.settings import Config, get_config
 
-DSPyRoleName = Literal["agent"]
-PydanticAIRoleName = Literal["agent"]
+RoleName = Literal["agent"]
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +118,8 @@ class FallbackSpec:
 	model: str
 
 
-def _dspy_role_config(config: Config, role: DSPyRoleName) -> RoleConfig:
-	"""Return role config for DSPy LM construction."""
+def _role_config(config: Config, role: RoleName):
+	"""Return role config for agent model construction."""
 	return config.agent_role
 
 
@@ -173,136 +166,8 @@ def parse_fallback_spec(
 	return FallbackSpec(provider=provider, model=model)
 
 
-def _build_dspy_lm_for_provider(
-	*,
-	provider: str,
-	model: str,
-	api_base: str,
-	cfg: Config,
-	role_label: str,
-	openrouter_provider_order: tuple[str, ...] = (),
-	thinking: bool = True,
-	temperature: float = 1.0,
-	max_tokens: int = 32000,
-) -> dspy.LM:
-	"""Build a single DSPy LM object from provider/model/api_base."""
-	if provider == "ollama":
-		kwargs: dict = dict(
-			api_key="ollama",
-			api_base=api_base or _default_api_base("ollama"),
-			temperature=temperature,
-			cache=False,
-			max_tokens=max_tokens,
-		)
-		if not thinking:
-			kwargs["reasoning_effort"] = "none"
-		return dspy.LM(f"ollama_chat/{model}", **kwargs)
-	if provider == "mlx":
-		return dspy.LM(
-			f"openai/{model}",
-			api_key="mlx",
-			api_base=api_base or _default_api_base("mlx"),
-			temperature=temperature,
-			cache=False,
-			max_tokens=max_tokens,
-		)
-	if provider == "openrouter":
-		api_key = _api_key_for_provider(cfg, "openrouter")
-		if not api_key:
-			raise RuntimeError(
-				f"missing_api_key:OPENROUTER_API_KEY required for {role_label}"
-			)
-		extra_body: dict | None = None
-		if openrouter_provider_order:
-			extra_body = {"provider": {"order": list(openrouter_provider_order)}}
-		return dspy.LM(
-			f"openrouter/{model}",
-			api_key=api_key,
-			api_base=api_base or _default_api_base("openrouter"),
-			temperature=temperature,
-			cache=False,
-			max_tokens=max_tokens,
-			extra_body=extra_body,
-		)
-	if provider == "opencode_go":
-		api_key = _api_key_for_provider(cfg, "opencode_go")
-		if not api_key:
-			raise RuntimeError(f"missing_api_key:OPENCODE_API_KEY required for {role_label}")
-		base = api_base or _default_api_base("opencode_go")
-		return dspy.LM(f"openai/{model}", api_key=api_key, api_base=base, temperature=temperature, cache=False, max_tokens=max_tokens)
-	if provider in {"zai", "openai", "minimax"}:
-		api_key = _api_key_for_provider(cfg, provider)
-		env_name = {
-			"zai": "ZAI_API_KEY",
-			"openai": "OPENAI_API_KEY",
-			"minimax": "MINIMAX_API_KEY",
-		}[provider]
-		if not api_key:
-			raise RuntimeError(f"missing_api_key:{env_name} required for {role_label}")
-		# Use native litellm prefix when available (enables function calling support).
-		litellm_prefix = {"minimax": "minimax", "zai": "zai", "openai": "openai"}[provider]
-		return dspy.LM(
-			f"{litellm_prefix}/{model}",
-			api_key=api_key,
-			api_base=api_base or _default_api_base(provider),
-			temperature=temperature,
-			cache=False,
-			max_tokens=max_tokens,
-		)
-	raise RuntimeError(f"unsupported_dspy_provider:{provider}")
-
-
-def build_dspy_lm(
-	role: DSPyRoleName,
-	*,
-	config: Config | None = None,
-) -> dspy.LM:
-	"""Build a DSPy LM object for the agent role.
-
-	Returns the LM without calling dspy.configure() globally.
-	Callers should use dspy.context(lm=lm) for thread-safe execution.
-	"""
-	cfg = config or get_config()
-	role_cfg = _dspy_role_config(cfg, role)
-	return _build_dspy_lm_for_provider(
-		provider=role_cfg.provider.strip().lower(),
-		model=role_cfg.model,
-		api_base=role_cfg.api_base,
-		cfg=cfg,
-		role_label=f"roles.{role}.provider={role_cfg.provider}",
-		openrouter_provider_order=role_cfg.openrouter_provider_order,
-		thinking=role_cfg.thinking,
-		temperature=role_cfg.temperature,
-		max_tokens=role_cfg.max_tokens,
-	)
-
-
-def build_dspy_fallback_lms(
-	role: DSPyRoleName,
-	*,
-	config: Config | None = None,
-) -> list[dspy.LM]:
-	"""Build fallback DSPy LMs from role config's fallback_models."""
-	cfg = config or get_config()
-	role_cfg = _dspy_role_config(cfg, role)
-	specs = [parse_fallback_spec(item) for item in role_cfg.fallback_models]
-	return [
-		_build_dspy_lm_for_provider(
-			provider=spec.provider.strip().lower(),
-			model=spec.model,
-			api_base="",
-			cfg=cfg,
-			role_label=f"roles.{role}.fallback={spec.provider}:{spec.model}",
-			thinking=role_cfg.thinking,
-			temperature=role_cfg.temperature,
-			max_tokens=role_cfg.max_tokens,
-		)
-		for spec in specs
-	]
-
-
 # ---------------------------------------------------------------------------
-# PydanticAI model builders (extract agents use these)
+# PydanticAI model builders
 # ---------------------------------------------------------------------------
 
 
@@ -341,7 +206,7 @@ def _make_retrying_http_client(
 	return AsyncClient(transport=transport)
 
 
-def _build_openai_model_settings(provider: str, cfg: Config) -> OpenAIChatModelSettings:
+def _build_openai_model_settings(cfg: Config) -> OpenAIChatModelSettings:
 	"""Build OpenAI-path model settings from Lerim Config.agent_role.
 
 	Used for non-MiniMax providers that go through the OpenAI-compat path.
@@ -434,7 +299,7 @@ def _build_pydantic_model_for_provider(
 
 	# All other providers: OpenAI-compat path
 	base_url = api_base or _default_api_base(provider, cfg)
-	# Ollama's OpenAI-compat endpoint lives at /v1; DSPy/litellm appends
+	# Ollama's OpenAI-compat endpoint lives at /v1; provider SDKs may append
 	# this internally but pydantic_ai's OpenAIProvider does not.
 	if provider == "ollama" and base_url and not base_url.rstrip("/").endswith("/v1"):
 		base_url = base_url.rstrip("/") + "/v1"
@@ -451,7 +316,7 @@ def _build_pydantic_model_for_provider(
 		http_client=http_client,
 	)
 	canonical_model = normalize_model_name(provider, model)
-	settings = _build_openai_model_settings(provider, cfg)
+	settings = _build_openai_model_settings(cfg)
 	return OpenAIChatModel(canonical_model, provider=openai_provider, settings=settings)
 
 
@@ -470,7 +335,7 @@ def _wrap_with_fallback(
 
 
 def build_pydantic_model(
-	role: PydanticAIRoleName = "agent",
+	role: RoleName = "agent",
 	*,
 	config: Config | None = None,
 ) -> Model:
@@ -495,7 +360,7 @@ def build_pydantic_model(
 	retrying primary model (which still has HTTP retry).
 	"""
 	cfg = config or get_config()
-	role_cfg = _dspy_role_config(cfg, role)
+	role_cfg = _role_config(cfg, role)
 
 	primary = _build_pydantic_model_for_provider(
 		provider=role_cfg.provider,
@@ -610,7 +475,7 @@ def list_provider_models(provider: str) -> list[str]:
 
 
 if __name__ == "__main__":
-	"""Run provider-layer self-test for shared utilities and DSPy builders."""
+	"""Run provider-layer self-test for shared utilities and model builders."""
 	cfg = get_config()
 
 	# -- shared utility tests --
@@ -624,9 +489,8 @@ if __name__ == "__main__":
 
 	assert isinstance(list_provider_models("ollama"), list)
 
-	# -- DSPy builder test --
-	dspy_model = build_dspy_lm("agent", config=cfg)
-	assert isinstance(dspy_model, dspy.LM)
+	model = build_pydantic_model("agent", config=cfg)
+	assert model is not None
 
 	print(
 		f"""\

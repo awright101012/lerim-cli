@@ -84,21 +84,23 @@ def test_role_config_construction():
     assert role.model == "qwen/qwen3-coder-30b-a3b-instruct"
 
 
-def test_dspy_role_config_construction():
-    """_build_role produces RoleConfig with DSPy fields from explicit values."""
+def test_role_config_construction_with_request_limits():
+    """_build_role should honor maintain/ask request limit overrides."""
     role = _build_role(
         {
-            "max_window_tokens": 300000,
-            "window_overlap_tokens": 5000,
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "max_iters_maintain": 12,
+            "max_iters_ask": 8,
         },
-        default_provider="ollama",
-        default_model="qwen3:8b",
+        default_provider="openrouter",
+        default_model="default-model",
     )
     assert isinstance(role, RoleConfig)
     assert role.provider == "ollama"
     assert role.model == "qwen3:8b"
-    assert role.max_window_tokens == 300000
-    assert role.window_overlap_tokens == 5000
+    assert role.max_iters_maintain == 12
+    assert role.max_iters_ask == 8
 
 
 def test_config_scaffold_creation(tmp_path, monkeypatch):

@@ -52,12 +52,9 @@ class RoleConfig:
 	# trace size via lerim.agents.tools.compute_request_budget(trace_path).
 	# No static extract-budget field on RoleConfig — the budget is derived
 	# at run start from the actual trace's line count, clamped [50, 100].
-	# DSPy ReAct iteration limits (maintain/ask still DSPy)
+	# PydanticAI request-turn limits for maintain/ask flows.
 	max_iters_maintain: int = 30
 	max_iters_ask: int = 30
-	# DSPy-specific
-	max_window_tokens: int = 100000
-	window_overlap_tokens: int = 5000
 
 
 def load_toml_file(path: Path | None) -> dict[str, Any]:
@@ -288,8 +285,6 @@ def _build_role(
 		parallel_tool_calls=bool(raw.get("parallel_tool_calls", True)),
 		max_iters_maintain=int(raw.get("max_iters_maintain", 30)),
 		max_iters_ask=int(raw.get("max_iters_ask", 30)),
-		max_window_tokens=int(raw.get("max_window_tokens", 100000)),
-		window_overlap_tokens=int(raw.get("window_overlap_tokens", 5000)),
 	)
 
 

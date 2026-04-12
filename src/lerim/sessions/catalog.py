@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 from lerim.adapters import registry as adapter_registry
+from lerim.config.project_scope import match_session_project
 from lerim.config.logging import logger
 from lerim.config.settings import get_config, reload_config
 
@@ -26,6 +27,7 @@ JOB_STATUS_DEAD_LETTER = "dead_letter"
 SESSION_JOB_ACTIVE = {JOB_STATUS_PENDING, JOB_STATUS_RUNNING}
 _DB_INIT_LOCK = threading.Lock()
 _DB_INITIALIZED_PATH: Path | None = None
+DEFAULT_RUNNING_JOB_LEASE_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,22 @@ def _to_iso(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.isoformat()
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse ISO timestamps, supporting ``Z`` suffix values."""
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _db_path() -> Path:
@@ -418,12 +436,19 @@ def index_new_sessions(
     return_details: bool = False,
     start: datetime | None = None,
     end: datetime | None = None,
+    projects: dict[str, str] | None = None,
+    skip_unscoped: bool = False,
+    stats: dict[str, int] | None = None,
 ) -> int | list[IndexedSession]:
     """Discover and index new sessions from connected adapters.
 
     Uses ID-based skip to avoid re-processing sessions that are already
     indexed.  New sessions are returned with ``changed=False``; sessions
     whose ID was already present are marked ``changed=True``.
+
+    When ``skip_unscoped=True`` and ``projects`` is provided, sessions whose
+    ``repo_path`` does not map to a registered project are ignored and counted
+    under ``stats['skipped_unscoped']``.
     """
     _ensure_sessions_db_initialized()
     config = get_config()
@@ -458,6 +483,14 @@ def index_new_sessions(
             continue
 
         for session in sessions:
+            if skip_unscoped:
+                if not projects or match_session_project(session.repo_path, projects) is None:
+                    if stats is not None:
+                        stats["skipped_unscoped"] = (
+                            int(stats.get("skipped_unscoped") or 0) + 1
+                        )
+                    continue
+
             is_changed = session.run_id in known_ids
 
             summaries_json = json.dumps(session.summaries, ensure_ascii=True)
@@ -701,6 +734,7 @@ def fail_session_job(
     error: str,
     retry_backoff_seconds: int = 60,
     job_type: str = JOB_TYPE_EXTRACT,
+    require_status: str | None = None,
 ) -> bool:
     """Record job failure and schedule retry or dead-letter transition."""
     if not run_id:
@@ -710,9 +744,15 @@ def fail_session_job(
     now_iso = now.isoformat()
 
     with _connect() as conn:
+        where = "run_id = ? AND job_type = ?"
+        params: list[Any] = [run_id, job_type]
+        if require_status:
+            where += " AND status = ?"
+            params.append(require_status)
+
         row = conn.execute(
-            "SELECT attempts, max_attempts FROM session_jobs WHERE run_id = ? AND job_type = ?",
-            (run_id, job_type),
+            f"SELECT attempts, max_attempts FROM session_jobs WHERE {where}",
+            params,
         ).fetchone()
         if not row:
             return False
@@ -727,25 +767,172 @@ def fail_session_job(
             else now + timedelta(seconds=max(1, int(retry_backoff_seconds)))
         )
 
+        update_params: list[Any] = [
+            status,
+            available_at.isoformat(),
+            now_iso if exhausted else None,
+            now_iso,
+            error,
+            run_id,
+            job_type,
+        ]
+        update_where = "run_id = ? AND job_type = ?"
+        if require_status:
+            update_where += " AND status = ?"
+            update_params.append(require_status)
+
         cursor = conn.execute(
-            """
+            f"""
             UPDATE session_jobs
             SET status = ?, available_at = ?, completed_at = ?,
                 updated_at = ?, error = ?
-            WHERE run_id = ? AND job_type = ?
+            WHERE {update_where}
             """,
-            (
-                status,
-                available_at.isoformat(),
-                now_iso if exhausted else None,
-                now_iso,
-                error,
-                run_id,
-                job_type,
-            ),
+            update_params,
         )
         conn.commit()
     return int(cursor.rowcount or 0) > 0
+
+
+def list_stale_running_jobs(
+    *,
+    lease_seconds: int = DEFAULT_RUNNING_JOB_LEASE_SECONDS,
+    job_type: str = JOB_TYPE_EXTRACT,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """List running jobs whose lease expired based on ``claimed_at`` age."""
+    _ensure_sessions_db_initialized()
+    effective_lease = max(1, int(lease_seconds))
+    cutoff = (_utc_now() - timedelta(seconds=effective_lease)).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, run_id, attempts, claimed_at, repo_path
+            FROM session_jobs
+            WHERE status = ? AND job_type = ?
+              AND claimed_at IS NOT NULL AND claimed_at <= ?
+            ORDER BY claimed_at ASC, id ASC
+            LIMIT ?
+            """,
+            (JOB_STATUS_RUNNING, job_type, cutoff, max(1, int(limit))),
+        ).fetchall()
+    return rows
+
+
+def reap_stale_running_jobs(
+    *,
+    lease_seconds: int = DEFAULT_RUNNING_JOB_LEASE_SECONDS,
+    retry_backoff_fn: Callable[[int], int] | None = None,
+    job_type: str = JOB_TYPE_EXTRACT,
+) -> int:
+    """Fail stale running jobs through the existing retry/dead-letter path."""
+    stale = list_stale_running_jobs(
+        lease_seconds=lease_seconds,
+        job_type=job_type,
+        limit=500,
+    )
+    if not stale:
+        return 0
+
+    recovered = 0
+    for row in stale:
+        run_id = str(row.get("run_id") or "")
+        if not run_id:
+            continue
+        attempts = max(int(row.get("attempts") or 1), 1)
+        retry_backoff_seconds = (
+            max(1, int(retry_backoff_fn(attempts)))
+            if retry_backoff_fn
+            else 60
+        )
+        ok = fail_session_job(
+            run_id,
+            error=f"stale running lease expired after {max(1, int(lease_seconds))}s",
+            retry_backoff_seconds=retry_backoff_seconds,
+            job_type=job_type,
+            require_status=JOB_STATUS_RUNNING,
+        )
+        if ok:
+            recovered += 1
+    return recovered
+
+
+def queue_health_snapshot(
+    *,
+    lease_seconds: int = DEFAULT_RUNNING_JOB_LEASE_SECONDS,
+) -> dict[str, Any]:
+    """Return queue health indicators for CLI/API visibility."""
+    _ensure_sessions_db_initialized()
+    now = _utc_now()
+    effective_lease = max(1, int(lease_seconds))
+    cutoff = (now - timedelta(seconds=effective_lease)).isoformat()
+
+    counts = count_session_jobs_by_status()
+    dead_letter_count = int(counts.get(JOB_STATUS_DEAD_LETTER, 0))
+
+    with _connect() as conn:
+        stale_row = conn.execute(
+            """
+            SELECT COUNT(1) AS total
+            FROM session_jobs
+            WHERE status = ? AND claimed_at IS NOT NULL AND claimed_at <= ?
+            """,
+            (JOB_STATUS_RUNNING, cutoff),
+        ).fetchone()
+        oldest_running_row = conn.execute(
+            """
+            SELECT claimed_at
+            FROM session_jobs
+            WHERE status = ? AND claimed_at IS NOT NULL
+            ORDER BY claimed_at ASC, id ASC
+            LIMIT 1
+            """,
+            (JOB_STATUS_RUNNING,),
+        ).fetchone()
+        oldest_dead_row = conn.execute(
+            """
+            SELECT updated_at
+            FROM session_jobs
+            WHERE status = ?
+            ORDER BY updated_at ASC, id ASC
+            LIMIT 1
+            """,
+            (JOB_STATUS_DEAD_LETTER,),
+        ).fetchone()
+
+    stale_running_count = int((stale_row or {}).get("total") or 0)
+    oldest_running_at = _parse_iso((oldest_running_row or {}).get("claimed_at"))
+    oldest_dead_at = _parse_iso((oldest_dead_row or {}).get("updated_at"))
+
+    oldest_running_age_seconds = (
+        max(0, int((now - oldest_running_at).total_seconds()))
+        if oldest_running_at
+        else None
+    )
+    oldest_dead_letter_age_seconds = (
+        max(0, int((now - oldest_dead_at).total_seconds()))
+        if oldest_dead_at
+        else None
+    )
+
+    degraded = stale_running_count > 0 or dead_letter_count > 0
+    advice_parts: list[str] = []
+    if stale_running_count > 0:
+        advice_parts.append("run `lerim sync` to trigger stale-job recovery")
+    if dead_letter_count > 0:
+        advice_parts.append(
+            "inspect with `lerim queue --failed`, then `lerim retry <run_id>` or `lerim skip <run_id>`"
+        )
+    advice = "; ".join(advice_parts)
+
+    return {
+        "degraded": degraded,
+        "stale_running_count": stale_running_count,
+        "dead_letter_count": dead_letter_count,
+        "oldest_running_age_seconds": oldest_running_age_seconds,
+        "oldest_dead_letter_age_seconds": oldest_dead_letter_age_seconds,
+        "advice": advice,
+    }
 
 
 def list_session_jobs(

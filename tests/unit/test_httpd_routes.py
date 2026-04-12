@@ -589,6 +589,18 @@ def test_post_ask(test_server):
 	assert "Mocked answer" in body["answer"]
 
 
+def test_post_ask_with_compat_limit_field(test_server):
+	"""POST /api/ask tolerates legacy `limit` field for compatibility."""
+	port, _, _ = test_server
+	status, body = _api_post(
+		port,
+		"/api/ask",
+		{"question": "What is Lerim?", "limit": 5},
+	)
+	assert status == 200
+	assert "answer" in body
+
+
 def test_post_ask_missing_question(test_server):
 	"""POST /api/ask without question returns 400."""
 	port, _, _ = test_server

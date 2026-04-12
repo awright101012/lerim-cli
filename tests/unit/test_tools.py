@@ -1,4 +1,4 @@
-"""Unit tests for MemoryTools + new reasoning-state tools and history processors."""
+"""Unit tests for memory tool functions and history processors."""
 
 from __future__ import annotations
 
@@ -17,15 +17,67 @@ from lerim.agents.tools import (
 	Finding,
 	MEMORY_TYPES,
 	MODEL_CONTEXT_TOKEN_LIMIT,
-	MemoryTools,
 	PRUNED_STUB,
+	archive,
+	build_test_ctx,
 	compute_request_budget,
 	context_pressure_injector,
+	edit,
+	grep,
 	note,
 	notes_state_injector,
 	prune,
 	prune_history_processor,
+	read,
+	scan,
+	verify_index,
+	write,
 )
+
+
+class ToolHarness:
+	"""Tiny wrapper exposing method-style access over module-level tools."""
+
+	def __init__(self, *, memory_root: Path, trace_path: Path | None = None):
+		self._ctx = build_test_ctx(memory_root=memory_root, trace_path=trace_path)
+
+	def read(self, filename: str, offset: int = 0, limit: int = 0) -> str:
+		return read(self._ctx, filename=filename, offset=offset, limit=limit)
+
+	def grep(self, filename: str, pattern: str, context_lines: int = 2) -> str:
+		return grep(
+			self._ctx,
+			filename=filename,
+			pattern=pattern,
+			context_lines=context_lines,
+		)
+
+	def scan(self, directory: str = "", pattern: str = "*.md") -> str:
+		return scan(self._ctx, directory=directory, pattern=pattern)
+
+	def write(self, type: str, name: str, description: str, body: str) -> str:
+		return write(self._ctx, type=type, name=name, description=description, body=body)
+
+	def edit(
+		self,
+		filename: str,
+		old_string: str,
+		new_string: str,
+		near_line: int = 0,
+	) -> str:
+		return edit(
+			self._ctx,
+			filename=filename,
+			old_string=old_string,
+			new_string=new_string,
+			near_line=near_line,
+		)
+
+	def archive(self, filename: str) -> str:
+		return archive(self._ctx, filename=filename)
+
+	def verify_index(self, filename: str = "index.md") -> str:
+		return verify_index(self._ctx, filename=filename)
 
 
 # ---------------------------------------------------------------------------
@@ -52,14 +104,14 @@ def trace_file(tmp_path):
 
 @pytest.fixture
 def tools(mem_root, trace_file):
-	"""MemoryTools instance with memory root and trace."""
-	return MemoryTools(memory_root=mem_root, trace_path=trace_file)
+	"""Tool harness instance with memory root and trace."""
+	return ToolHarness(memory_root=mem_root, trace_path=trace_file)
 
 
 @pytest.fixture
 def tools_no_trace(mem_root):
-	"""MemoryTools instance without a trace path."""
-	return MemoryTools(memory_root=mem_root)
+	"""Tool harness instance without a trace path."""
+	return ToolHarness(memory_root=mem_root)
 
 
 def _write_memory_file(mem_root, filename, name, description, mem_type="feedback"):
@@ -156,7 +208,7 @@ class TestRead:
 
 	def test_trace_huge_single_line_is_truncated(self, tmp_path):
 		"""A single trace line >TRACE_MAX_LINE_BYTES gets truncated in place."""
-		from lerim.agents.tools import MemoryTools, TRACE_MAX_LINE_BYTES
+		from lerim.agents.tools import TRACE_MAX_LINE_BYTES
 
 		mem = tmp_path / "memory"
 		mem.mkdir()
@@ -165,7 +217,7 @@ class TestRead:
 		big_line = "x" * 20_000
 		trace.write_text(big_line + "\n" + "short line 2\n", encoding="utf-8")
 
-		tools = MemoryTools(memory_root=mem, trace_path=trace)
+		tools = ToolHarness(memory_root=mem, trace_path=trace)
 		result = tools.read("trace", offset=0, limit=2)
 
 		# The big line is truncated with a marker; the short line survives.
@@ -190,7 +242,6 @@ class TestRead:
 	def test_trace_chunk_byte_cap_cuts_chunk_short(self, tmp_path):
 		"""A 100-line chunk whose total bytes >TRACE_MAX_CHUNK_BYTES is cut short."""
 		from lerim.agents.tools import (
-			MemoryTools,
 			TRACE_MAX_CHUNK_BYTES,
 			TRACE_MAX_LINES_PER_READ,
 		)
@@ -202,7 +253,7 @@ class TestRead:
 		lines = ["y" * 2_000 for _ in range(100)]
 		trace.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-		tools = MemoryTools(memory_root=mem, trace_path=trace)
+		tools = ToolHarness(memory_root=mem, trace_path=trace)
 		result = tools.read("trace", offset=0, limit=100)
 
 		# Count how many lines the cap let through (line-numbered content rows).
@@ -305,7 +356,7 @@ class TestScan:
 	def test_scan_with_memories(self, tools, mem_root):
 		"""Scan returns manifest with filename, description, modified."""
 		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref", "feedback")
-		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch", "project")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "framework arch", "project")
 		result = json.loads(tools.scan())
 		assert result["count"] == 2
 		filenames = {m["filename"] for m in result["memories"]}
@@ -355,7 +406,8 @@ class TestScan:
 		# Write a memory
 		tools.write(
 			type="feedback", name="Roundtrip test",
-			description="Testing scan after write", body="Body content.",
+			description="Testing scan after write",
+			body="Use tabs for indentation.\n**Why:** Team convention.\n**How to apply:** Set indent_style=tab.",
 		)
 		after = json.loads(tools.scan())
 		assert after["count"] == 1
@@ -366,7 +418,8 @@ class TestScan:
 		"""write() then archive() then scan() -> file gone from manifest, appears in archived."""
 		tools.write(
 			type="feedback", name="Archive roundtrip",
-			description="Will be archived", body="Body content.",
+			description="Will be archived",
+			body="Archive this.\n**Why:** Testing archival.\n**How to apply:** Check archived dir.",
 		)
 		# Verify it exists in main scan
 		before = json.loads(tools.scan())
@@ -395,7 +448,8 @@ class TestWrite:
 		"""Write creates a new feedback memory file."""
 		result = json.loads(tools.write(
 			type="feedback", name="Use tabs",
-			description="Tabs over spaces", body="Always use tabs.",
+			description="Tabs over spaces",
+			body="Always use tabs.\n**Why:** Team convention.\n**How to apply:** Set indent_style=tab.",
 		))
 		assert result["type"] == "feedback"
 		assert result["filename"] == "feedback_use_tabs.md"
@@ -409,8 +463,8 @@ class TestWrite:
 	def test_create_project(self, tools, mem_root):
 		"""Write creates a project memory."""
 		result = json.loads(tools.write(
-			type="project", name="DSPy migration",
-			description="Migrated to DSPy ReAct",
+			type="project", name="framework migration",
+			description="Migrated to PydanticAI agent",
 			body="Migration completed.\n\n**Why:** Optimizable.\n\n**How to apply:** Use LerimRuntime.",
 		))
 		assert result["type"] == "project"
@@ -420,7 +474,7 @@ class TestWrite:
 		"""Write with type=summary creates file in summaries/ subdir."""
 		result = json.loads(tools.write(
 			type="summary", name="Migration session",
-			description="Migrated to DSPy",
+			description="Migrated to PydanticAI",
 			body="## User Intent\n\nMigrate runtime.\n\n## What Happened\n\nDone.",
 		))
 		assert result["type"] == "summary"
@@ -444,9 +498,11 @@ class TestWrite:
 	def test_file_exists_returns_error(self, tools, mem_root):
 		"""Write same name twice returns error pointing to read + edit."""
 		tools.write(type="feedback", name="Use tabs",
-		            description="Tabs pref", body="Body.")
+		            description="Tabs pref",
+		            body="Use tabs.\n**Why:** Convention.\n**How to apply:** Set tabs.")
 		result = tools.write(type="feedback", name="Use tabs",
-		                     description="Dup attempt", body="Body.")
+		                     description="Dup attempt",
+		                     body="Use tabs.\n**Why:** Convention.\n**How to apply:** Set tabs.")
 		assert "Error" in result
 		assert "already exists" in result
 		assert "read(" in result
@@ -479,9 +535,15 @@ class TestWrite:
 	def test_all_memory_types(self, tools, mem_root):
 		"""All MEMORY_TYPES can be created."""
 		for t in MEMORY_TYPES:
+			if t in ("feedback", "project"):
+				body = f"Rule for {t}.\n**Why:** Reason.\n**How to apply:** Action."
+			elif t == "summary":
+				body = f"## User Intent\n\nTest {t}.\n\n## What Happened\n\nDone."
+			else:
+				body = f"Body for {t}."
 			result = json.loads(tools.write(
 				type=t, name=f"Test {t}",
-				description=f"Desc for {t}", body=f"Body for {t}.",
+				description=f"Desc for {t}", body=body,
 			))
 			assert result["type"] == t
 
@@ -489,7 +551,8 @@ class TestWrite:
 		"""Name with special chars -> filename contains only alphanumeric + underscores."""
 		result = json.loads(tools.write(
 			type="feedback", name="Use (tabs) & spaces!!",
-			description="Sanitization test", body="Body.",
+			description="Sanitization test",
+			body="Use tabs.\n**Why:** Convention.\n**How to apply:** Set tabs.",
 		))
 		filename = result["filename"]
 		# Strip the "feedback_" prefix and ".md" suffix to get the slug
@@ -506,11 +569,13 @@ class TestWrite:
 		"""Write feedback 'Auth' then project 'Auth' -> both files created (different type prefix)."""
 		r1 = json.loads(tools.write(
 			type="feedback", name="Auth",
-			description="Auth feedback", body="Feedback body.",
+			description="Auth feedback",
+			body="Use OAuth2.\n**Why:** Security.\n**How to apply:** Add OAuth2 middleware.",
 		))
 		r2 = json.loads(tools.write(
 			type="project", name="Auth",
-			description="Auth project", body="Project body.",
+			description="Auth project",
+			body="OAuth2 chosen.\n**Why:** Compliance.\n**How to apply:** Migrate all endpoints.",
 		))
 		assert r1["filename"] == "feedback_auth.md"
 		assert r2["filename"] == "project_auth.md"
@@ -520,7 +585,7 @@ class TestWrite:
 
 	def test_write_body_with_frontmatter_delimiter(self, tools, mem_root):
 		"""Body containing '---' on its own line -> file is still valid, frontmatter intact."""
-		body_with_delimiters = "Some text.\n\n---\n\nMore text after horizontal rule."
+		body_with_delimiters = "Some text.\n**Why:** Reason.\n**How to apply:** Action.\n\n---\n\nMore text after horizontal rule."
 		result = json.loads(tools.write(
 			type="feedback", name="Delimiter test",
 			description="Body has triple dashes", body=body_with_delimiters,
@@ -543,7 +608,8 @@ class TestWrite:
 		long_name = "a" * 210
 		result = json.loads(tools.write(
 			type="feedback", name=long_name,
-			description="Long name test", body="Body.",
+			description="Long name test",
+			body="Rule.\n**Why:** Reason.\n**How to apply:** Action.",
 		))
 		filename = result["filename"]
 		slug = filename[len("feedback_"):-len(".md")]
@@ -552,7 +618,7 @@ class TestWrite:
 		assert (mem_root / filename).exists()
 		# Read it back to confirm it works
 		content = tools.read(filename)
-		assert "Body." in content
+		assert "Rule." in content
 
 	# -----------------------------------------------------------------
 	# YAML frontmatter stress tests (Bug #1: colon-in-description crash)
@@ -590,7 +656,7 @@ class TestWrite:
 			type="feedback",
 			name="roundtrip",
 			description=value,
-			body="Body content.",
+			body="Rule here.\n**Why:** Reason.\n**How to apply:** Action.",
 		))
 		path = mem_root / result["filename"]
 		assert path.exists()
@@ -604,7 +670,7 @@ class TestWrite:
 		)
 		assert post.get("name") == "roundtrip"
 		assert post.get("type") == "feedback"
-		assert "Body content." in post.content
+		assert "Rule here." in post.content
 
 	@pytest.mark.parametrize(
 		"value",
@@ -624,7 +690,7 @@ class TestWrite:
 			type="feedback",
 			name=value,
 			description="stress test",
-			body="Body.",
+			body="Rule.\n**Why:** Reason.\n**How to apply:** Action.",
 		))
 		path = mem_root / result["filename"]
 		assert path.exists()
@@ -647,7 +713,7 @@ class TestWrite:
 			type="project",
 			name=nasty_name,
 			description=nasty_description,
-			body="## User Intent\n\nTest.\n\n## What Happened\n\nDone.",
+			body="Redis chosen as cache.\n**Why:** Needs pub/sub.\n**How to apply:** Use Redis for new caching.",
 		))
 		path = mem_root / result["filename"]
 		assert path.exists()
@@ -831,7 +897,7 @@ class TestVerifyIndex:
 	def test_ok_when_consistent(self, tools, mem_root):
 		"""Returns OK when index.md matches all memory files."""
 		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
-		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "framework arch")
 		(mem_root / "index.md").write_text(
 			"# Memory\n\n- [Tabs](feedback_tabs.md) — pref\n- [Arch](project_arch.md) — arch\n"
 		)
@@ -842,7 +908,7 @@ class TestVerifyIndex:
 	def test_missing_from_index(self, tools, mem_root):
 		"""Reports files missing from index."""
 		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
-		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "framework arch")
 		(mem_root / "index.md").write_text(
 			"# Memory\n\n- [Tabs](feedback_tabs.md) — pref\n"
 		)
@@ -884,7 +950,7 @@ class TestVerifyIndex:
 	def test_verify_index_with_extra_sections(self, tools, mem_root):
 		"""Index with multiple ## sections, some empty -> still validates correctly."""
 		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
-		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "framework arch")
 		(mem_root / "index.md").write_text(
 			"# Memory\n\n"
 			"## User Preferences\n"
@@ -919,7 +985,7 @@ class TestVerifyIndex:
 	def test_duplicate_entry_detected(self, tools, mem_root):
 		"""Reports when the same filename appears twice in index.md."""
 		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
-		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "framework arch")
 		(mem_root / "index.md").write_text(
 			"# Memory\n\n"
 			"## User Preferences\n"
@@ -950,7 +1016,7 @@ class TestVerifyIndex:
 	def test_no_duplicate_when_unique(self, tools, mem_root):
 		"""No duplicate report when each file appears exactly once."""
 		_write_memory_file(mem_root, "feedback_tabs.md", "Use tabs", "Tabs pref")
-		_write_memory_file(mem_root, "project_arch.md", "Architecture", "DSPy arch")
+		_write_memory_file(mem_root, "project_arch.md", "Architecture", "framework arch")
 		(mem_root / "index.md").write_text(
 			"# Memory\n\n"
 			"- [Tabs](feedback_tabs.md) — pref\n"
@@ -962,11 +1028,11 @@ class TestVerifyIndex:
 
 
 # ---------------------------------------------------------------------------
-# DSPy tool introspection
+# Tool introspection
 # ---------------------------------------------------------------------------
 
 
-class TestDspyIntrospection:
+class TestToolIntrospection:
 	def test_tools_are_callable_methods(self, tools):
 		"""All tool methods are callable bound methods."""
 		for method in [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.archive, tools.verify_index]:
@@ -982,16 +1048,19 @@ class TestDspyIntrospection:
 		assert len(maintain) == 6
 		assert len(ask) == 2
 
-	def test_dspy_tool_wrapping(self, tools):
-		"""dspy.Tool should correctly wrap each method."""
-		import dspy
-		methods = [tools.read, tools.grep, tools.scan, tools.write, tools.edit, tools.archive, tools.verify_index]
+	def test_tool_method_names(self, tools):
+		"""Wrapper methods should expose stable names used by tests/docs."""
+		methods = [
+			tools.read,
+			tools.grep,
+			tools.scan,
+			tools.write,
+			tools.edit,
+			tools.archive,
+			tools.verify_index,
+		]
 		expected_names = {"read", "grep", "scan", "write", "edit", "archive", "verify_index"}
-		seen = set()
-		for method in methods:
-			dt = dspy.Tool(method)
-			seen.add(dt.name)
-			assert dt.name != "partial"
+		seen = {m.__name__ for m in methods}
 		assert seen == expected_names
 
 	def test_memory_types_constant(self):
@@ -1018,9 +1087,9 @@ class TestFinding:
 
 	def test_finding_round_trip(self):
 		"""Construct a Finding, serialize, deserialize, check field equality."""
-		f = Finding(theme="DSPy migration", offset=142, quote="the three-pass was overengineered")
+		f = Finding(theme="framework migration", offset=142, quote="the three-pass was overengineered", level="decision")
 		data = f.model_dump()
-		assert data == {"theme": "DSPy migration", "offset": 142, "quote": "the three-pass was overengineered"}
+		assert data == {"theme": "framework migration", "offset": 142, "quote": "the three-pass was overengineered", "level": "decision"}
 		f2 = Finding.model_validate(data)
 		assert f2 == f
 
@@ -1039,11 +1108,11 @@ class TestFinding:
 		"""offset must coerce to int; non-integer strings reject."""
 		from pydantic import ValidationError
 
-		f = Finding(theme="x", offset=42, quote="y")
+		f = Finding(theme="x", offset=42, quote="y", level="decision")
 		assert f.offset == 42
 		# Pydantic's default coercion accepts "42" → 42; non-numeric fails.
 		with pytest.raises(ValidationError):
-			Finding(theme="x", offset="not a number", quote="y")  # type: ignore[arg-type]
+			Finding(theme="x", offset="not a number", quote="y", level="decision")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -1065,8 +1134,8 @@ class TestNote:
 		deps = ExtractDeps(memory_root=tmp_path)
 		ctx = SimpleNamespace(deps=deps)
 		findings = [
-			Finding(theme="migration", offset=10, quote="..."),
-			Finding(theme="migration", offset=42, quote="..."),
+			Finding(theme="migration", offset=10, quote="...", level="decision"),
+			Finding(theme="migration", offset=42, quote="...", level="decision"),
 		]
 		ret = note(ctx, findings)
 		assert deps.notes == findings
@@ -1077,8 +1146,8 @@ class TestNote:
 		"""Two note() calls with 3+2 findings produce deps.notes of length 5 in order."""
 		deps = ExtractDeps(memory_root=tmp_path)
 		ctx = SimpleNamespace(deps=deps)
-		first = [Finding(theme="a", offset=1, quote="q1") for _ in range(3)]
-		second = [Finding(theme="b", offset=2, quote="q2") for _ in range(2)]
+		first = [Finding(theme="a", offset=1, quote="q1", level="decision") for _ in range(3)]
+		second = [Finding(theme="b", offset=2, quote="q2", level="decision") for _ in range(2)]
 		note(ctx, first)
 		note(ctx, second)
 		assert len(deps.notes) == 5
@@ -1352,14 +1421,14 @@ class TestNotesStateInjector:
 		deps = ExtractDeps(memory_root=tmp_path)
 		ctx = _fake_ctx(deps)
 		deps.notes.extend([
-			Finding(theme="DSPy migration", offset=1, quote="a"),
-			Finding(theme="DSPy migration", offset=2, quote="b"),
-			Finding(theme="DSPy migration", offset=3, quote="c"),
-			Finding(theme="config refactor", offset=10, quote="d"),
-			Finding(theme="config refactor", offset=11, quote="e"),
-			Finding(theme="config refactor", offset=12, quote="f"),
-			Finding(theme="config refactor", offset=13, quote="g"),
-			Finding(theme="robustness", offset=20, quote="h"),
+			Finding(theme="framework migration", offset=1, quote="a", level="decision"),
+			Finding(theme="framework migration", offset=2, quote="b", level="decision"),
+			Finding(theme="framework migration", offset=3, quote="c", level="decision"),
+			Finding(theme="config refactor", offset=10, quote="d", level="implementation"),
+			Finding(theme="config refactor", offset=11, quote="e", level="implementation"),
+			Finding(theme="config refactor", offset=12, quote="f", level="implementation"),
+			Finding(theme="config refactor", offset=13, quote="g", level="implementation"),
+			Finding(theme="robustness", offset=20, quote="h", level="decision"),
 		])
 		messages = [_make_model_request_with_user_prompt("hi")]
 		notes_state_injector(ctx, messages)
@@ -1373,7 +1442,7 @@ class TestNotesStateInjector:
 		assert notes_line is not None
 		assert "8 findings" in notes_line
 		assert "3 theme" in notes_line
-		assert "DSPy migration" in notes_line
+		assert "framework migration" in notes_line
 		assert "config refactor" in notes_line
 		assert "robustness" in notes_line
 
@@ -1387,7 +1456,7 @@ class TestNotesStateInjector:
 		ctx = _fake_ctx(deps)
 
 		# First call — 1 theme
-		deps.notes.append(Finding(theme="theme1", offset=1, quote="q"))
+		deps.notes.append(Finding(theme="theme1", offset=1, quote="q", level="decision"))
 		messages_1 = [_make_model_request_with_user_prompt("turn 1")]
 		notes_state_injector(ctx, messages_1)
 		from pydantic_ai.messages import SystemPromptPart
@@ -1401,7 +1470,7 @@ class TestNotesStateInjector:
 		assert "1 theme" in line_1
 
 		# Mutate deps.notes (like a note() call between turns) — add a new theme.
-		deps.notes.append(Finding(theme="theme2", offset=2, quote="q2"))
+		deps.notes.append(Finding(theme="theme2", offset=2, quote="q2", level="decision"))
 
 		# Second call — should reflect the NEW state (2 themes)
 		messages_2 = [_make_model_request_with_user_prompt("turn 2")]

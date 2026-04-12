@@ -15,6 +15,8 @@ from lerim.sessions.catalog import (
 	index_session_for_fts,
 	init_sessions_db,
 	list_queue_jobs,
+	queue_health_snapshot,
+	reap_stale_running_jobs,
 	resolve_run_id_prefix,
 	retry_project_jobs,
 	retry_session_job,
@@ -558,3 +560,86 @@ def test_empty_database_claim():
 	"""No jobs at all: claim returns empty list, no error."""
 	jobs = claim_session_jobs(limit=10)
 	assert jobs == []
+
+
+def test_reap_stale_running_job_marks_failed():
+	"""Stale running job is recovered through fail path (status -> failed)."""
+	_seed_and_enqueue("stale-1", "/tmp/proj-stale", start_time="2026-03-01T10:00:00Z")
+	claimed = claim_session_jobs(limit=1, run_ids=["stale-1"])
+	assert len(claimed) == 1
+	old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+	with _connect() as conn:
+		conn.execute(
+			"UPDATE session_jobs SET claimed_at = ?, updated_at = ? WHERE run_id = ?",
+			(old, old, "stale-1"),
+		)
+		conn.commit()
+
+	recovered = reap_stale_running_jobs(
+		lease_seconds=60,
+		retry_backoff_fn=lambda attempts: 1 if attempts >= 1 else 1,
+	)
+	assert recovered == 1
+	with _connect() as conn:
+		row = conn.execute(
+			"SELECT status, error FROM session_jobs WHERE run_id = ?",
+			("stale-1",),
+		).fetchone()
+	assert row["status"] == "failed"
+	assert "stale running lease expired" in str(row["error"] or "")
+
+
+def test_reap_stale_running_job_to_dead_letter_when_attempts_exhausted():
+	"""Stale running job dead-letters when max_attempts already exhausted."""
+	_seed_and_enqueue("stale-dl", "/tmp/proj-stale", start_time="2026-03-01T10:00:00Z")
+	with _connect() as conn:
+		conn.execute(
+			"UPDATE session_jobs SET max_attempts = 1 WHERE run_id = ?",
+			("stale-dl",),
+		)
+		conn.commit()
+	claimed = claim_session_jobs(limit=1, run_ids=["stale-dl"])
+	assert len(claimed) == 1
+	old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+	with _connect() as conn:
+		conn.execute(
+			"UPDATE session_jobs SET claimed_at = ?, updated_at = ? WHERE run_id = ?",
+			(old, old, "stale-dl"),
+		)
+		conn.commit()
+
+	recovered = reap_stale_running_jobs(lease_seconds=60)
+	assert recovered == 1
+	with _connect() as conn:
+		row = conn.execute(
+			"SELECT status, completed_at FROM session_jobs WHERE run_id = ?",
+			("stale-dl",),
+		).fetchone()
+	assert row["status"] == "dead_letter"
+	assert row["completed_at"] is not None
+
+
+def test_queue_health_snapshot_reports_degraded():
+	"""Queue health reports dead-letter + stale-running degradation details."""
+	_seed_and_enqueue("qh-run", "/tmp/proj-qh", start_time="2026-03-01T10:00:00Z")
+	_seed_and_enqueue("qh-dead", "/tmp/proj-qh2", start_time="2026-03-01T10:00:00Z")
+	claim_session_jobs(limit=1, run_ids=["qh-run"])
+	old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+	with _connect() as conn:
+		conn.execute(
+			"UPDATE session_jobs SET claimed_at = ?, updated_at = ? WHERE run_id = ?",
+			(old, old, "qh-run"),
+		)
+		conn.execute(
+			"UPDATE session_jobs SET status = 'dead_letter', updated_at = ? WHERE run_id = ?",
+			(old, "qh-dead"),
+		)
+		conn.commit()
+
+	health = queue_health_snapshot(lease_seconds=60)
+	assert health["degraded"] is True
+	assert health["stale_running_count"] >= 1
+	assert health["dead_letter_count"] >= 1
+	assert isinstance(health["oldest_running_age_seconds"], int)
+	assert isinstance(health["oldest_dead_letter_age_seconds"], int)
+	assert "lerim queue --failed" in str(health["advice"])

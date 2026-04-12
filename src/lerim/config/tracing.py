@@ -1,8 +1,7 @@
-"""MLflow tracing for DSPy agent observability.
+"""MLflow tracing for PydanticAI agent observability.
 
-Activates MLflow autologging for DSPy when ``LERIM_MLFLOW=true`` is set.
-All DSPy module calls, LM interactions, and tool invocations are captured
-automatically — no manual span instrumentation needed.
+Activates MLflow autologging for PydanticAI when ``LERIM_MLFLOW=true`` is set.
+All PydanticAI agent/model/tool spans are captured automatically.
 
 Traces are stored in a local SQLite database (~/.lerim/mlflow.db).
 External OTel OTLP export is disabled to avoid noise when no collector runs.
@@ -11,16 +10,108 @@ External OTel OTLP export is disabled to avoid noise when no collector runs.
 from __future__ import annotations
 
 import os
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
 
 import mlflow
-import mlflow.dspy
+import mlflow.pydantic_ai
+from mlflow.exceptions import MlflowException
+from mlflow.store.db.utils import (
+	_initialize_tables,
+	_upgrade_db,
+	_verify_schema,
+	create_sqlalchemy_engine,
+)
 from loguru import logger
 
 from lerim.config.settings import Config
 
 
+def _is_recoverable_schema_reset_error(message: str) -> bool:
+	"""Return True when local MLflow DB should be reset and reinitialized."""
+	text = message.lower()
+	return (
+		"can't locate revision" in text
+		or "cannot locate revision" in text
+		or "no such table" in text
+		or "no such column" in text
+	)
+
+
+def _backup_and_reset_mlflow_db(db_path: Path) -> Path | None:
+	"""Backup current MLflow DB and remove broken DB files for re-init."""
+	if not db_path.exists():
+		return None
+	timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+	backup_path = db_path.with_name(f"{db_path.stem}.backup-{timestamp}{db_path.suffix}")
+	backup_path.parent.mkdir(parents=True, exist_ok=True)
+	shutil.copy2(db_path, backup_path)
+	for suffix in ("", "-wal", "-shm"):
+		candidate = Path(str(db_path) + suffix)
+		try:
+			candidate.unlink()
+		except FileNotFoundError:
+			continue
+	return backup_path
+
+
+def _ensure_mlflow_schema(tracking_uri: str, db_path: str) -> None:
+	"""Ensure MLflow SQLite schema matches installed MLflow revision.
+
+	When MLflow is upgraded, existing local SQLite files may be on an older
+	alembic revision. In that case we run the same DB upgrade used by
+	``mlflow db upgrade`` so runtime startup remains seamless.
+	"""
+	engine = create_sqlalchemy_engine(tracking_uri)
+	try:
+		_verify_schema(engine)
+	except MlflowException as exc:
+		error_msg = str(exc).lower()
+		if "out-of-date database schema" in error_msg:
+			logger.info("Upgrading MLflow database schema at {}", db_path)
+			try:
+				_upgrade_db(engine)
+			except Exception as upgrade_exc:
+				if _is_recoverable_schema_reset_error(str(upgrade_exc)):
+					backup_path = _backup_and_reset_mlflow_db(Path(db_path))
+					logger.warning(
+						"MLflow schema upgrade failed; backed up DB to {} and reinitializing {}",
+						str(backup_path) if backup_path else "<none>",
+						db_path,
+					)
+					fresh_engine = create_sqlalchemy_engine(tracking_uri)
+					_initialize_tables(fresh_engine)
+					return
+				raise
+			return
+		if _is_recoverable_schema_reset_error(str(exc)):
+			backup_path = _backup_and_reset_mlflow_db(Path(db_path))
+			logger.warning(
+				"MLflow revision state is broken; backed up DB to {} and reinitializing {}",
+				str(backup_path) if backup_path else "<none>",
+				db_path,
+			)
+			fresh_engine = create_sqlalchemy_engine(tracking_uri)
+			_initialize_tables(fresh_engine)
+			return
+		raise
+	except Exception as exc:
+		if _is_recoverable_schema_reset_error(str(exc)):
+			backup_path = _backup_and_reset_mlflow_db(Path(db_path))
+			logger.warning(
+				"MLflow revision state is broken; backed up DB to {} and reinitializing {}",
+				str(backup_path) if backup_path else "<none>",
+				db_path,
+			)
+			fresh_engine = create_sqlalchemy_engine(tracking_uri)
+			_initialize_tables(fresh_engine)
+			return
+		raise
+
+
 def configure_tracing(config: Config, experiment_name: str = "lerim") -> None:
-	"""Activate MLflow DSPy autologging if enabled via LERIM_MLFLOW env var.
+	"""Activate MLflow PydanticAI autologging if enabled via env/config.
 
 	Must be called once at startup before any agent is constructed.
 
@@ -40,14 +131,48 @@ def configure_tracing(config: Config, experiment_name: str = "lerim") -> None:
 	os.environ.pop("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", None)
 
 	db_path = config.global_data_dir / "mlflow.db"
-	mlflow.set_tracking_uri(f"sqlite:///{db_path}")
-	mlflow.set_experiment(experiment_name)
-	mlflow.dspy.autolog()
-	logger.info(
-		"MLflow tracing enabled (DSPy autolog) → sqlite:///{} experiment={}",
-		db_path,
-		experiment_name,
-	)
+	tracking_uri = f"sqlite:///{db_path}"
+
+	def _activate_mlflow() -> None:
+		mlflow.set_tracking_uri(tracking_uri)
+		mlflow.set_experiment(experiment_name)
+		mlflow.pydantic_ai.autolog()
+
+	try:
+		_ensure_mlflow_schema(tracking_uri, str(db_path))
+		_activate_mlflow()
+		logger.info(
+			"MLflow tracing enabled (PydanticAI autolog) → sqlite:///{} experiment={}",
+			db_path,
+			experiment_name,
+		)
+	except Exception as exc:
+		if _is_recoverable_schema_reset_error(str(exc)):
+			backup_path = _backup_and_reset_mlflow_db(Path(db_path))
+			logger.warning(
+				"MLflow revision state is broken; backed up DB to {} and reinitializing {}",
+				str(backup_path) if backup_path else "<none>",
+				db_path,
+			)
+			try:
+				_ensure_mlflow_schema(tracking_uri, str(db_path))
+				_activate_mlflow()
+				logger.info(
+					"MLflow tracing enabled (PydanticAI autolog) → sqlite:///{} experiment={}",
+					db_path,
+					experiment_name,
+				)
+				return
+			except Exception as retry_exc:
+				logger.warning(
+					"MLflow tracing disabled due to initialization error: {}",
+					retry_exc,
+				)
+				return
+		logger.warning(
+			"MLflow tracing disabled due to initialization error: {}",
+			exc,
+		)
 
 
 if __name__ == "__main__":

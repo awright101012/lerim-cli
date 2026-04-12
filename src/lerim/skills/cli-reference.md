@@ -104,8 +104,8 @@ lerim logs --json               # raw JSONL output
 ### `lerim serve`
 
 JSON HTTP API + daemon loop in one process (Docker entrypoint). The **web UI**
-is **[Lerim Cloud](https://lerim.dev)** — not bundled in this repo. GET `/` may
-return a stub page linking to Cloud when no static assets are present.
+is not bundled in this repo yet. GET `/` may return a stub page when no
+static assets are present.
 
 ```bash
 lerim serve
@@ -136,7 +136,7 @@ lerim connect remove claude               # disconnect Claude
 ### `lerim sync`
 
 Hot-path: discover new agent sessions from connected platforms, enqueue them,
-and run DSPy extraction to create memories.
+and run PydanticAI extraction to create memories.
 Requires a running server (`lerim up` or `lerim serve`).
 
 **Time window** controls which sessions to scan:
@@ -173,7 +173,7 @@ lerim sync --ignore-lock            # skip writer lock (debugging only)
 | `--ignore-lock` | off | Skip writer lock (risk of corruption) |
 
 Notes:
-- `sync` is the hot path (queue + DSPy extraction + lead write).
+- `sync` is the hot path (queue + PydanticAI extraction + lead write).
 - Cold maintenance work is not executed in `sync`.
 
 ### `lerim maintain`
@@ -202,8 +202,7 @@ on `sync_interval_minutes` / `maintain_interval_minutes`) runs **inside**
 
 ### `lerim dashboard`
 
-Shows that the web UI has moved to **Lerim Cloud** (`https://lerim.dev`)
-and lists CLI alternatives for common tasks.
+Shows current web UI status and lists CLI alternatives for common tasks.
 
 ```bash
 lerim dashboard
@@ -258,14 +257,13 @@ Requires a running server (`lerim up` or `lerim serve`).
 
 ```bash
 lerim ask 'What auth pattern do we use?'
-lerim ask "How is the database configured?" --limit 5
+lerim ask "How is the database configured?"
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `question` | required | Your question (quote if spaces) |
 | `--project` | -- | Scope to project (not yet implemented) |
-| `--limit` | `12` | Max memory items as context |
 
 Notes:
 - Ask uses memory retrieval evidence.
@@ -322,7 +320,7 @@ lerim skip --all
 
 ### `lerim auth`
 
-Authenticate with Lerim Cloud (browser login, token, status, logout).
+Authenticate with the hosted auth service (browser login, token, status, logout).
 
 ```bash
 lerim auth                    # browser OAuth (default)

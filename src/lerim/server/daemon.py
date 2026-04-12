@@ -16,6 +16,7 @@ from lerim.config.project_scope import match_session_project
 from lerim.config.settings import get_config, reload_config
 from lerim.server.runtime import LerimRuntime
 from lerim.sessions.catalog import (
+    DEFAULT_RUNNING_JOB_LEASE_SECONDS,
     IndexedSession,
     claim_session_jobs,
     complete_session_job,
@@ -23,6 +24,7 @@ from lerim.sessions.catalog import (
     fail_session_job,
     fetch_session_doc,
     index_new_sessions,
+    reap_stale_running_jobs,
     record_service_run,
 )
 
@@ -58,6 +60,7 @@ class OperationResult:
 	queued_sessions: int = 0
 	extracted_sessions: int = 0
 	skipped_sessions: int = 0
+	skipped_unscoped: int = 0
 	failed_sessions: int = 0
 	run_ids: list[str] = field(default_factory=list)
 	window_start: str | None = None
@@ -99,6 +102,7 @@ class OperationResult:
 		if self.operation == "sync":
 			attrs["indexed_sessions"] = self.indexed_sessions
 			attrs["extracted_sessions"] = self.extracted_sessions
+			attrs["skipped_unscoped"] = self.skipped_unscoped
 			attrs["failed_sessions"] = self.failed_sessions
 		elif self.operation == "maintain":
 			attrs["projects_count"] = len(self.projects)
@@ -114,6 +118,7 @@ EXIT_FATAL = 1
 EXIT_PARTIAL = 3
 EXIT_LOCK_BUSY = 4
 WRITER_LOCK_NAME = "writer.lock"
+RUNNING_JOB_LEASE_SECONDS = DEFAULT_RUNNING_JOB_LEASE_SECONDS
 
 
 def lock_path(name: str) -> Path:
@@ -152,6 +157,7 @@ def _empty_sync_summary() -> SyncSummary:
         indexed_sessions=0,
         extracted_sessions=0,
         skipped_sessions=0,
+        skipped_unscoped=0,
         failed_sessions=0,
         run_ids=[],
     )
@@ -302,6 +308,7 @@ class SyncSummary:
     failed_sessions: int
     run_ids: list[str]
     cost_usd: float = 0.0
+    skipped_unscoped: int = 0
 
 
 def resolve_window_bounds(
@@ -476,6 +483,7 @@ def run_sync_once(
         target_run_ids: list[str] = []
         indexed_sessions = 0
         queued_sessions = 0
+        skipped_unscoped = 0
         if run_id:
             target_run_ids = [run_id]
             if not dry_run:
@@ -487,30 +495,38 @@ def run_sync_once(
                     session_repo_path or None, config.projects
                 )
                 matched_path = str(match[1]) if match else None
-                queued = enqueue_session_job(
-                    run_id,
-                    agent_type=session.get("agent_type") if session else None,
-                    session_path=session.get("session_path") if session else None,
-                    start_time=session.get("start_time") if session else None,
-                    trigger=trigger,
-                    force=True,
-                    repo_path=matched_path,
-                )
-                queued_sessions = 1 if queued else 0
+                if not matched_path:
+                    skipped_unscoped = 1
+                else:
+                    queued = enqueue_session_job(
+                        run_id,
+                        agent_type=session.get("agent_type") if session else None,
+                        session_path=session.get("session_path") if session else None,
+                        start_time=session.get("start_time") if session else None,
+                        trigger=trigger,
+                        force=True,
+                        repo_path=matched_path,
+                    )
+                    queued_sessions = 1 if queued else 0
         else:
             if dry_run:
                 target_run_ids = []
             else:
+                index_stats: dict[str, int] = {"skipped_unscoped": 0}
                 indexed = index_new_sessions(
                     agents=agent_filter,
                     return_details=True,
                     start=window_start,
                     end=window_end,
+                    projects=config.projects,
+                    skip_unscoped=True,
+                    stats=index_stats,
                 )
                 details: list[IndexedSession] = (
                     indexed if isinstance(indexed, list) else []
                 )
                 indexed_sessions = len(details)
+                skipped_unscoped = int(index_stats.get("skipped_unscoped") or 0)
                 for item in details:
                     match = match_session_project(item.repo_path, config.projects)
                     if match is None:
@@ -544,6 +560,10 @@ def run_sync_once(
             # After processing, claim again to get the next session.
             total_processed = 0
             while total_processed < claim_limit:
+                reap_stale_running_jobs(
+                    lease_seconds=RUNNING_JOB_LEASE_SECONDS,
+                    retry_backoff_fn=_retry_backoff_seconds,
+                )
                 claimed = claim_session_jobs(
                     limit=claim_limit - total_processed,
                     run_ids=[run_id] if run_id else None,
@@ -573,6 +593,7 @@ def run_sync_once(
             indexed_sessions=indexed_sessions,
             extracted_sessions=extracted,
             skipped_sessions=skipped,
+            skipped_unscoped=skipped_unscoped,
             failed_sessions=failed,
             run_ids=target_run_ids,
             cost_usd=cost_usd,
@@ -596,6 +617,7 @@ def run_sync_once(
             queued_sessions=queued_sessions,
             extracted_sessions=extracted,
             skipped_sessions=skipped,
+            skipped_unscoped=skipped_unscoped,
             failed_sessions=failed,
             run_ids=target_run_ids,
             window_start=window_start.isoformat() if window_start else None,
@@ -694,8 +716,25 @@ def run_maintain_once(
         config = get_config()
         projects = config.projects or {}
         if not projects:
-            # No registered projects — maintain CWD-based fallback.
-            projects = {"global": str(Path.cwd())}
+            op_result = OperationResult(
+                operation="maintain",
+                status="completed",
+                trigger=trigger,
+                projects={},
+            )
+            details = op_result.to_details_json()
+            details["message"] = (
+                "No registered projects. Add one with `lerim project add <path>`."
+            )
+            _record_service_event(
+                record_service_run,
+                job_type="maintain",
+                status="completed",
+                started_at=started,
+                trigger=trigger,
+                details=details,
+            )
+            return EXIT_OK, details
 
         results: dict[str, dict] = {}
         failed_projects: list[str] = []
@@ -768,5 +807,3 @@ def run_maintain_once(
         return EXIT_FATAL, {"error": str(exc)}
     finally:
         writer.release()
-
-
