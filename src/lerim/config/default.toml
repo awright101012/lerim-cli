@@ -28,12 +28,15 @@ max_iters_maintain = 50                # max ReAct iterations for agent role in 
 max_iters_ask = 20                     # max ReAct iterations for agent role in ask flow
 openrouter_provider_order = []
 thinking = true
-# Bumped 0.1 → 0.5 on 2026-04-11 after PydanticAI smoke on MiniMax-M2.5
-# showed temperature=0.1 + MiniMax's stochastic early-run tool-call flubs
-# deterministically trapped the agent in failure loops. 0.5 gives enough
-# randomness to recover from its own bad tool calls without being sloppy.
-temperature = 0.5
-max_tokens = 32000
+# MiniMax-M2 official sampling preset (from HuggingFace model card):
+# temperature=1.0, top_p=0.95, top_k=40. These are for "agent/tool-calling
+# tasks" per the vendor recommendation. See also MiniMax docs re valid
+# temperature range (0.0, 1.0] — clamped in _build_model_settings.
+temperature = 1.0
+top_p = 0.95
+top_k = 40                              # passed via extra_body (not a standard OpenAI param)
+max_tokens = 32000                      # completion budget passed to the model
+parallel_tool_calls = true              # enable parallel tool emission when the model supports it
 
 [providers]
 # Default API base URLs per provider.

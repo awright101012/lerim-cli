@@ -42,8 +42,12 @@ class RoleConfig:
 	fallback_models: tuple[str, ...] = ()
 	openrouter_provider_order: tuple[str, ...] = ()
 	thinking: bool = True
+	# MiniMax-M2 official preset: temperature=1.0, top_p=0.95, top_k=40
 	temperature: float = 1.0
+	top_p: float = 0.95
+	top_k: int = 40
 	max_tokens: int = 32000
+	parallel_tool_calls: bool = True
 	# PydanticAI single-pass sync now auto-scales its request_limit from
 	# trace size via lerim.agents.tools.compute_request_budget(trace_path).
 	# No static extract-budget field on RoleConfig — the budget is derived
@@ -278,7 +282,10 @@ def _build_role(
 		openrouter_provider_order=_to_string_tuple(raw.get("openrouter_provider_order")),
 		thinking=bool(raw.get("thinking", True)),
 		temperature=float(raw.get("temperature", 1.0)),
+		top_p=float(raw.get("top_p", 0.95)),
+		top_k=int(raw.get("top_k", 40)),
 		max_tokens=int(raw.get("max_tokens", 32000)),
+		parallel_tool_calls=bool(raw.get("parallel_tool_calls", True)),
 		max_iters_maintain=int(raw.get("max_iters_maintain", 30)),
 		max_iters_ask=int(raw.get("max_iters_ask", 30)),
 		max_window_tokens=int(raw.get("max_window_tokens", 100000)),

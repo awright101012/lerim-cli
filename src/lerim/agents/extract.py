@@ -302,15 +302,16 @@ def build_extract_agent(model: Model) -> Agent[ExtractDeps, ExtractionResult]:
 			notes_state_injector,
 			prune_history_processor,
 		],
-		# Tool-call arg validation retries. Default is 1 which is too
-		# tight for untrained models on heavy contexts — MiniMax-M2.5
-		# has stochastic early-run tool-call flubs where it emits
-		# malformed JSON args for the first few turns before stabilizing.
-		# Observed on the 137/157-line smoke traces: retries=3 would
-		# exhaust at 21-200s, retries=5 absorbs the flub burst and lets
-		# the model recover. Generous enough to handle warmup
-		# stochasticity, tight enough to still crash on genuine bugs.
-		retries=5,
+		# Tool-call arg validation retries. MiniMax-M2.5's OpenAI-compat
+		# layer stochastically emits native XML-format tool calls that
+		# fail pydantic schema validation (5-12 failures per run on some
+		# traces, especially negative ones). The retry counter is
+		# CUMULATIVE per tool name across the whole run, so retries=5
+		# was too tight — 6 total schema failures for 'read' would crash
+		# even if 20 clean reads succeeded in between. 10 gives enough
+		# headroom for the observed flub distribution while still
+		# catching genuine infinite-loop bugs.
+		retries=10,
 		output_retries=3,
 	)
 

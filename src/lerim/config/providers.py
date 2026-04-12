@@ -372,8 +372,10 @@ def _build_model_settings(provider: str, cfg: Config) -> OpenAIChatModelSettings
 		temperature = max(0.01, min(1.0, temperature))
 	return OpenAIChatModelSettings(
 		temperature=temperature,
+		top_p=role_cfg.top_p,
 		max_tokens=role_cfg.max_tokens,
-		parallel_tool_calls=True,
+		parallel_tool_calls=role_cfg.parallel_tool_calls,
+		extra_body={"top_k": role_cfg.top_k},
 	)
 
 
