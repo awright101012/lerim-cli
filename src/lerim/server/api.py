@@ -862,7 +862,7 @@ def api_queue_jobs(
             selected = _resolve_selected_projects(
                 config=config, scope="project", project=project
             )
-        except ValueError as exc:
+        except ValueError:
             # Backward-compatible fallback for HTTP/API callers that still
             # pass free-form project substrings.
             selected = []

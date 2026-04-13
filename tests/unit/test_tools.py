@@ -1343,12 +1343,12 @@ class TestContextPressureInjector:
 			p.content for m in out
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		assert any("CONTEXT:" in l for l in labels)
+		assert any("CONTEXT:" in line for line in labels)
 		# No pressure wording
-		for l in labels:
-			if "CONTEXT:" in l:
-				assert "pressure" not in l.lower()
-				assert "HARD" not in l
+		for line in labels:
+			if "CONTEXT:" in line:
+				assert "pressure" not in line.lower()
+				assert "HARD" not in line
 
 	def test_soft_pressure_label(self, tmp_path):
 		"""60-80% triggers soft pressure wording suggesting prune()."""
@@ -1366,10 +1366,10 @@ class TestContextPressureInjector:
 			p.content for m in messages
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		ctx_labels = [l for l in labels if "CONTEXT:" in l]
+		ctx_labels = [line for line in labels if "CONTEXT:" in line]
 		assert ctx_labels, "Expected at least one CONTEXT: label"
-		assert any("soft pressure" in l for l in ctx_labels)
-		assert not any("HARD PRESSURE" in l for l in ctx_labels)
+		assert any("soft pressure" in line for line in ctx_labels)
+		assert not any("HARD PRESSURE" in line for line in ctx_labels)
 
 	def test_hard_pressure_label(self, tmp_path):
 		"""Above 80% triggers HARD PRESSURE wording demanding prune()."""
@@ -1385,9 +1385,9 @@ class TestContextPressureInjector:
 			p.content for m in messages
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		ctx_labels = [l for l in labels if "CONTEXT:" in l]
+		ctx_labels = [line for line in labels if "CONTEXT:" in line]
 		assert ctx_labels
-		assert any("HARD PRESSURE" in l for l in ctx_labels)
+		assert any("HARD PRESSURE" in line for line in ctx_labels)
 
 
 # ---------------------------------------------------------------------------
@@ -1414,7 +1414,7 @@ class TestNotesStateInjector:
 			p.content for m in messages
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		assert any("NOTES:" in l and "0 findings" in l for l in labels)
+		assert any("NOTES:" in line and "0 findings" in line for line in labels)
 
 	def test_notes_grouped_by_theme(self, tmp_path):
 		"""deps.notes with 8 findings across 3 themes produces a label listing all three."""
@@ -1438,7 +1438,7 @@ class TestNotesStateInjector:
 			p.content for m in messages
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		notes_line = next((l for l in labels if l.startswith("NOTES:")), None)
+		notes_line = next((line for line in labels if line.startswith("NOTES:")), None)
 		assert notes_line is not None
 		assert "8 findings" in notes_line
 		assert "3 theme" in notes_line
@@ -1465,7 +1465,7 @@ class TestNotesStateInjector:
 			p.content for m in messages_1
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		line_1 = next((l for l in labels_1 if l.startswith("NOTES:")), None)
+		line_1 = next((line for line in labels_1 if line.startswith("NOTES:")), None)
 		assert line_1 is not None
 		assert "1 theme" in line_1
 
@@ -1479,7 +1479,7 @@ class TestNotesStateInjector:
 			p.content for m in messages_2
 			for p in m.parts if isinstance(p, SystemPromptPart)
 		]
-		line_2 = next((l for l in labels_2 if l.startswith("NOTES:")), None)
+		line_2 = next((line for line in labels_2 if line.startswith("NOTES:")), None)
 		assert line_2 is not None
 		assert "2 theme" in line_2
 		assert "theme2" in line_2

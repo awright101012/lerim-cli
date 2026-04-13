@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import fields
-from pathlib import Path
 
 from pydantic_ai.models.test import TestModel
 
@@ -26,15 +25,11 @@ from lerim.agents.extract import (
 )
 from lerim.agents.tools import (
 	ExtractDeps,
-	Finding,
 	compute_request_budget,
-	context_pressure_injector,
 	edit,
 	grep,
 	note,
-	notes_state_injector,
 	prune,
-	prune_history_processor,
 	read,
 	verify_index,
 	write,

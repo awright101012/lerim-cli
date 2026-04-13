@@ -114,8 +114,6 @@ class TestRunWithFallback:
 		assert seen == ["primary"]
 
 	def test_retry_transient_error_same_model(self, tmp_path, monkeypatch):
-		import lerim.server.runtime as runtime_mod
-
 		monkeypatch.setattr(time, "sleep", lambda *_: None)
 		rt = _build_runtime(tmp_path, monkeypatch)
 		attempts = 0

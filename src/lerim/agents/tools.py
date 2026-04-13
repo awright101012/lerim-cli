@@ -1065,6 +1065,21 @@ def prune_history_processor(
 	return messages
 
 
+# Test/compat helper: construct a minimal context wrapper exposing ctx.deps.
+def build_test_ctx(
+	memory_root: Path,
+	trace_path: Path | None = None,
+	run_folder: Path | None = None,
+):
+	"""Return a lightweight RunContext-like object for direct tool calls in tests."""
+	deps = ExtractDeps(
+		memory_root=Path(memory_root),
+		trace_path=Path(trace_path) if trace_path else None,
+		run_folder=Path(run_folder) if run_folder else None,
+	)
+	return SimpleNamespace(deps=deps)
+
+
 # ── Legacy compatibility shim (DSPy maintain/ask agents only) ────────────
 
 
