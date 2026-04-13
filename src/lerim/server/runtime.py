@@ -350,6 +350,7 @@ class LerimRuntime:
 			logger.warning(f"[maintain] Failed to write agent trace: {exc}")
 			agent_trace_path.write_text("[]", encoding="utf-8")
 
+		index_path = resolved_memory_root / "index.md"
 		if index_path.exists():
 			logger.info(f"[maintain] Memory index at {index_path}")
 

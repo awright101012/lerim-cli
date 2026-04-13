@@ -552,171 +552,11 @@ def _cmd_unscoped(args: argparse.Namespace) -> int:
 	return 0
 
 
-def _project_state(project: dict[str, Any]) -> str:
-	"""Classify one project status row for snapshot/live status views."""
-	queue = project.get("queue") or {}
-	dead = int(queue.get("dead_letter") or 0)
-	running = int(queue.get("running") or 0)
-	pending = int(queue.get("pending") or 0)
-	memory = int(project.get("memory_count") or 0)
-	if dead > 0 and str(project.get("oldest_blocked_run_id") or "").strip():
-		return "blocked"
-	if running > 0:
-		return "running"
-	if pending > 0:
-		return "queued"
-	if memory > 0:
-		return "healthy"
-	return "idle"
-
-
-def _project_next_action(project: dict[str, Any]) -> str:
-	"""Return concise next action guidance for one project row."""
-	name = str(project.get("name") or "").strip()
-	queue = project.get("queue") or {}
-	dead = int(queue.get("dead_letter") or 0)
-	if dead > 0:
-		blocked = str(project.get("oldest_blocked_run_id") or "").strip()
-		if blocked:
-			return f"retry {blocked[:12]} / skip {blocked[:12]}"
-		return f"retry --project {name}"
-	if int(queue.get("running") or 0) > 0:
-		return f"queue --project {name}"
-	if int(queue.get("pending") or 0) > 0:
-		return f"queue --project {name}"
-	return "-"
-
-
-def _render_status_output(payload: dict[str, Any], *, refreshed_at: str) -> Any:
-	"""Build the shared rich renderable for both status snapshot and --live."""
-	from rich.console import Group
-	from rich.panel import Panel
-	from rich.table import Table
-	from rich.text import Text
-
-	queue = payload.get("queue") or {}
-	scope_data = payload.get("scope") or {}
-	projects = payload.get("projects") or []
-	unscoped = payload.get("unscoped_sessions") or {}
-	queue_health = payload.get("queue_health") or {}
-	blocked_projects = [p for p in projects if _project_state(p) == "blocked"]
-
-	summary = Table.grid(expand=True, padding=(0, 2))
-	summary.add_column(justify="left", style="bold")
-	summary.add_column(justify="left")
-	summary.add_row("Connected agents", str(len(payload.get("connected_agents", []))))
-	summary.add_row("Memory files", str(int(payload.get("memory_count") or 0)))
-	summary.add_row("Indexed sessions", str(int(payload.get("sessions_indexed_count") or 0)))
-	summary.add_row("Queue", _format_queue_counts(queue))
-	summary.add_row(
-		"Unscoped sessions",
-		f"{int(unscoped.get('total') or 0)} ({json.dumps(unscoped.get('by_agent') or {}, ensure_ascii=True)})",
-	)
-	summary.add_row(
-		"Skipped unscoped (last sync)",
-		str(int(scope_data.get("skipped_unscoped") or 0)),
-	)
-	summary.add_row(
-		"Streams",
-		"Independent per project (one blocked stream does not stop others)",
-	)
-
-	project_table = Table(title="Project Streams", expand=True)
-	project_table.add_column("Project", no_wrap=True)
-	project_table.add_column("State", no_wrap=True)
-	project_table.add_column("Queue")
-	project_table.add_column("Memory", no_wrap=True)
-	project_table.add_column("Blocker", no_wrap=True)
-	project_table.add_column("Next Step")
-
-	state_style = {
-		"blocked": "red bold",
-		"running": "cyan",
-		"queued": "yellow",
-		"healthy": "green",
-		"idle": "dim",
-	}
-
-	for item in projects:
-		name = str(item.get("name") or "")
-		state = _project_state(item)
-		style = state_style.get(state, "white")
-		pqueue = item.get("queue") or {}
-		queue_text = _format_queue_counts(pqueue)
-		memory_count = str(int(item.get("memory_count") or 0))
-		blocked_by = str(item.get("oldest_blocked_run_id") or "").strip()
-		blocked_short = blocked_by[:16] if blocked_by else "-"
-		project_table.add_row(
-			name,
-			f"[{style}]{state}[/{style}]",
-			queue_text,
-			memory_count,
-			blocked_short,
-			_project_next_action(item),
-		)
-
-	meaning = Table.grid(expand=True, padding=(0, 2))
-	meaning.add_column(justify="left", style="bold")
-	meaning.add_column(justify="left")
-	meaning.add_row("project stream", "Queue + extraction flow for one registered project.")
-	meaning.add_row("blocked", "Oldest job is dead_letter; this project stream is paused.")
-	meaning.add_row("running", "A job is being processed now.")
-	meaning.add_row("queued", "Jobs are waiting; stream is not blocked.")
-	meaning.add_row("unscoped", "Indexed sessions with no registered project match (not extracted).")
-	meaning.add_row("dead_letter", "Failed max retries; needs retry or skip.")
-
-	action_lines: list[str] = []
-	if blocked_projects:
-		action_lines.append(
-			f"{len(blocked_projects)} project(s) blocked. Other projects continue independently."
-		)
-		action_lines.append("Inspect blockers: lerim queue --failed")
-		for item in blocked_projects[:3]:
-			name = str(item.get("name") or "")
-			blocked = str(item.get("oldest_blocked_run_id") or "").strip()
-			if blocked:
-				action_lines.append(f"Unblock {name}: lerim retry {blocked}")
-			else:
-				action_lines.append(f"Unblock {name}: lerim retry --project {name}")
-	else:
-		action_lines.append("No blocked projects.")
-
-	if queue_health.get("degraded"):
-		advice = str(queue_health.get("advice") or "").strip()
-		if advice:
-			action_lines.append(f"Queue health: {advice}")
-
-	header = Text(f"Lerim Status ({refreshed_at})", style="bold blue")
-	blocked_table: Table | None = None
-	if blocked_projects:
-		blocked_table = Table(title="Blocked Streams", expand=True)
-		blocked_table.add_column("Project", no_wrap=True)
-		blocked_table.add_column("Run ID", no_wrap=True)
-		blocked_table.add_column("Reason")
-		blocked_table.add_column("Fix", no_wrap=True)
-		for item in blocked_projects:
-			name = str(item.get("name") or "").strip()
-			run_id = str(item.get("oldest_blocked_run_id") or "").strip()
-			reason = str(item.get("last_error") or "").strip() or "dead_letter at queue head"
-			if len(reason) > 120:
-				reason = f"{reason[:117]}..."
-			fix = f"lerim retry {run_id}" if run_id else f"lerim retry --project {name}"
-			blocked_table.add_row(name, run_id or "-", reason, fix)
-
-	parts: list[Any] = [header, Panel(summary, title="Summary", border_style="blue")]
-	if projects:
-		parts.append(project_table)
-	if blocked_table is not None:
-		parts.append(blocked_table)
-	parts.append(Panel(meaning, title="What These Terms Mean", border_style="magenta"))
-	parts.append(Panel("\n".join(action_lines), title="What To Do Next", border_style="green"))
-	return Group(*parts)
-
-
 def _cmd_status_live(args: argparse.Namespace) -> int:
 	"""Live status dashboard for project stream health and queue state."""
 	from datetime import datetime, timezone
 	from rich.live import Live
+	from lerim.server.status_tui import render_status_output
 
 	interval = max(0.5, float(getattr(args, "interval", 3.0)))
 	scope = _normalize_scope(getattr(args, "scope", None))
@@ -743,7 +583,7 @@ def _cmd_status_live(args: argparse.Namespace) -> int:
 					live.stop()
 					return _not_running()
 				refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-				live.update(_render_status_output(payload, refreshed_at=refreshed_at))
+				live.update(render_status_output(payload, refreshed_at=refreshed_at))
 				time.sleep(interval)
 	except KeyboardInterrupt:
 		_emit("")
@@ -835,40 +675,41 @@ def _cmd_skip(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    """Forward status request to the running Lerim server."""
-    if getattr(args, "live", False):
-        live_args = argparse.Namespace(
-            command="status",
-            json=getattr(args, "json", False),
-            interval=float(getattr(args, "interval", 3.0)),
-            scope=getattr(args, "scope", "all"),
-            project=getattr(args, "project", None),
-        )
-        return _cmd_status_live(live_args)
+	"""Forward status request to the running Lerim server."""
+	if getattr(args, "live", False):
+		live_args = argparse.Namespace(
+			command="status",
+			json=getattr(args, "json", False),
+			interval=float(getattr(args, "interval", 3.0)),
+			scope=getattr(args, "scope", "all"),
+			project=getattr(args, "project", None),
+		)
+		return _cmd_status_live(live_args)
 
-    scope = _normalize_scope(getattr(args, "scope", None))
-    query = f"/api/status?scope={scope}"
-    project = getattr(args, "project", None)
-    if project:
-        query += f"&project={urllib.parse.quote(str(project))}"
-    data = _api_get(query)
-    if data is None:
-        return _not_running()
-    if data.get("error"):
-        if args.json:
-            _emit(json.dumps(data, indent=2, ensure_ascii=True))
-        else:
-            _emit(str(data.get("error")), file=sys.stderr)
-        return 1
-    if args.json:
-        _emit(json.dumps(data, indent=2, ensure_ascii=True))
-    else:
-        from datetime import datetime, timezone
-        from rich.console import Console
+	scope = _normalize_scope(getattr(args, "scope", None))
+	query = f"/api/status?scope={scope}"
+	project = getattr(args, "project", None)
+	if project:
+		query += f"&project={urllib.parse.quote(str(project))}"
+	data = _api_get(query)
+	if data is None:
+		return _not_running()
+	if data.get("error"):
+		if args.json:
+			_emit(json.dumps(data, indent=2, ensure_ascii=True))
+		else:
+			_emit(str(data.get("error")), file=sys.stderr)
+		return 1
+	if args.json:
+		_emit(json.dumps(data, indent=2, ensure_ascii=True))
+	else:
+		from datetime import datetime, timezone
+		from rich.console import Console
+		from lerim.server.status_tui import render_status_output
 
-        refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-        Console().print(_render_status_output(data, refreshed_at=refreshed_at))
-    return 0
+		refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+		Console().print(render_status_output(data, refreshed_at=refreshed_at))
+	return 0
 
 
 _PROVIDERS = [

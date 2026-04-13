@@ -15,6 +15,7 @@ from lerim.sessions.catalog import (
     index_session_for_fts,
     init_sessions_db,
     latest_service_run,
+    list_service_runs,
     list_queue_jobs,
     list_session_jobs,
     list_sessions_window,
@@ -42,6 +43,7 @@ __all__ = [
     "count_unscoped_sessions_by_agent",
     "record_service_run",
     "latest_service_run",
+    "list_service_runs",
     "list_queue_jobs",
     "list_unscoped_sessions",
 ]

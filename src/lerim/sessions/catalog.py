@@ -1287,6 +1287,41 @@ def latest_service_run(job_type: str) -> dict[str, Any] | None:
     }
 
 
+def list_service_runs(*, limit: int = 20) -> list[dict[str, Any]]:
+    """Return latest service runs across all job types, newest first."""
+    _ensure_sessions_db_initialized()
+    safe_limit = max(1, int(limit))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, job_type, status, started_at, completed_at, trigger, details_json
+            FROM service_runs
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        details_raw = row.get("details_json")
+        try:
+            details = json.loads(details_raw) if details_raw else {}
+        except (json.JSONDecodeError, TypeError):
+            details = {}
+        items.append(
+            {
+                "id": row.get("id"),
+                "job_type": row.get("job_type"),
+                "status": row.get("status"),
+                "started_at": row.get("started_at"),
+                "completed_at": row.get("completed_at"),
+                "trigger": row.get("trigger"),
+                "details": details,
+            }
+        )
+    return items
+
+
 if __name__ == "__main__":
     prev_cfg = os.getenv("LERIM_CONFIG")
     try:

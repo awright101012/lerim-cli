@@ -48,6 +48,8 @@ from lerim.sessions.catalog import (
     count_session_jobs_by_status,
     count_unscoped_sessions_by_agent,
     latest_service_run,
+    list_session_jobs,
+    list_service_runs,
     list_queue_jobs,
     list_unscoped_sessions,
     queue_health_snapshot,
@@ -512,6 +514,205 @@ def api_maintain(force: bool = False, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+def _parse_iso_time(raw: str | None) -> datetime | None:
+    """Parse an ISO timestamp safely."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _duration_ms_from_run(run: dict[str, Any]) -> int | None:
+    """Compute run duration in milliseconds when timestamps are valid."""
+    started = _parse_iso_time(str(run.get("started_at") or ""))
+    completed = _parse_iso_time(str(run.get("completed_at") or ""))
+    if not started or not completed:
+        return None
+    return int((completed - started).total_seconds() * 1000)
+
+
+def _normalize_activity_item(run: dict[str, Any]) -> dict[str, Any]:
+    """Normalize one service_run row into status activity item."""
+    details = run.get("details") if isinstance(run.get("details"), dict) else {}
+    projects_metrics = (
+        details.get("projects_metrics")
+        if isinstance(details.get("projects_metrics"), dict)
+        else {}
+    )
+    project_names = sorted(str(k) for k in projects_metrics.keys())
+    if len(project_names) == 1:
+        project_label = project_names[0]
+    elif len(project_names) > 1:
+        project_label = f"{len(project_names)} projects"
+    else:
+        project_label = "global"
+
+    op_type = str(run.get("job_type") or "sync")
+    base: dict[str, Any] = {
+        "time": run.get("started_at"),
+        "op_type": op_type,
+        "status": str(run.get("status") or "unknown"),
+        "duration_ms": _duration_ms_from_run(run),
+        "projects": project_names,
+        "project_label": project_label,
+        "error": str(details.get("error") or ""),
+    }
+
+    if op_type == "maintain":
+        maintain_metrics = (
+            details.get("maintain_metrics")
+            if isinstance(details.get("maintain_metrics"), dict)
+            else {}
+        )
+        counts = (
+            maintain_metrics.get("counts")
+            if isinstance(maintain_metrics.get("counts"), dict)
+            else {}
+        )
+        if not counts:
+            agg = {"merged": 0, "archived": 0, "consolidated": 0, "unchanged": 0}
+            projects = details.get("projects") if isinstance(details.get("projects"), dict) else {}
+            for project_result in projects.values():
+                if not isinstance(project_result, dict):
+                    continue
+                raw = project_result.get("counts") if isinstance(project_result.get("counts"), dict) else {}
+                agg["merged"] += int(raw.get("merged") or 0)
+                agg["archived"] += int(raw.get("archived") or raw.get("decayed") or 0)
+                agg["consolidated"] += int(raw.get("consolidated") or 0)
+                agg["unchanged"] += int(raw.get("unchanged") or 0)
+            counts = agg
+        base.update(
+            {
+                "maintain_counts": {
+                    "merged": int(counts.get("merged") or 0),
+                    "archived": int(counts.get("archived") or 0),
+                    "consolidated": int(counts.get("consolidated") or 0),
+                    "unchanged": int(counts.get("unchanged") or 0),
+                },
+                "memories_new": int(maintain_metrics.get("memories_new") or 0),
+                "memories_updated": int(maintain_metrics.get("memories_updated") or 0),
+                "memories_archived": int(maintain_metrics.get("memories_archived") or 0),
+                "index_updated": bool(maintain_metrics.get("index_updated")),
+            }
+        )
+        return base
+
+    sync_metrics = details.get("sync_metrics") if isinstance(details.get("sync_metrics"), dict) else {}
+    base.update(
+        {
+            "sessions_analyzed": int(
+                sync_metrics.get("sessions_analyzed")
+                or details.get("indexed_sessions")
+                or details.get("queued_sessions")
+                or 0
+            ),
+            "sessions_extracted": int(
+                sync_metrics.get("sessions_extracted")
+                or details.get("extracted_sessions")
+                or 0
+            ),
+            "sessions_failed": int(
+                sync_metrics.get("sessions_failed")
+                or details.get("failed_sessions")
+                or 0
+            ),
+            "sessions_skipped": int(
+                sync_metrics.get("sessions_skipped")
+                or details.get("skipped_sessions")
+                or 0
+            ),
+            "memories_new": int(
+                sync_metrics.get("memories_new")
+                or details.get("learnings_new")
+                or 0
+            ),
+            "memories_updated": int(
+                sync_metrics.get("memories_updated")
+                or details.get("learnings_updated")
+                or 0
+            ),
+            "memories_archived": int(sync_metrics.get("memories_archived") or 0),
+            "index_updated": bool(sync_metrics.get("index_updated")),
+        }
+    )
+    return base
+
+
+def _recent_activity(
+    *,
+    limit: int = 12,
+    allowed_projects: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return normalized recent service activity for status UI."""
+    rows = list_service_runs(limit=max(1, int(limit)))
+    items = [_normalize_activity_item(run) for run in rows]
+    if allowed_projects:
+        filtered: list[dict[str, Any]] = []
+        for item in items:
+            projects = item.get("projects")
+            if isinstance(projects, list) and projects:
+                if any(str(name) in allowed_projects for name in projects):
+                    filtered.append(item)
+            elif item.get("project_label") in allowed_projects:
+                filtered.append(item)
+        items = filtered
+    return items
+
+
+def _running_activity_rows(
+    *,
+    selected_projects: list[tuple[str, Path]],
+) -> list[dict[str, Any]]:
+    """Build live activity rows from currently running queue jobs."""
+    jobs = list_session_jobs(limit=200, status="running")
+    if not jobs:
+        return []
+
+    repo_to_name: dict[str, str] = {
+        str(path): str(name) for name, path in selected_projects
+    }
+    allowed_repo_paths = set(repo_to_name.keys())
+    now = datetime.now(timezone.utc)
+    grouped: dict[str, dict[str, Any]] = {}
+
+    for job in jobs:
+        repo_path = str(job.get("repo_path") or "").strip()
+        if allowed_repo_paths and repo_path not in allowed_repo_paths:
+            continue
+        project_name = repo_to_name.get(repo_path) or (Path(repo_path).name if repo_path else "global")
+        row = grouped.setdefault(
+            project_name,
+            {
+                "time": now.isoformat(),
+                "op_type": "sync",
+                "status": "running",
+                "duration_ms": 0,
+                "projects": [project_name],
+                "project_label": project_name,
+                "error": "",
+                "sessions_analyzed": 0,
+                "sessions_extracted": 0,
+                "sessions_failed": 0,
+                "sessions_skipped": 0,
+                "memories_new": 0,
+                "memories_updated": 0,
+                "memories_archived": 0,
+                "index_updated": False,
+            },
+        )
+        row["sessions_analyzed"] = int(row.get("sessions_analyzed") or 0) + 1
+        claimed = _parse_iso_time(str(job.get("claimed_at") or ""))
+        if claimed is not None:
+            elapsed_ms = max(0, int((now - claimed).total_seconds() * 1000))
+            row["duration_ms"] = max(int(row.get("duration_ms") or 0), elapsed_ms)
+
+    items = list(grouped.values())
+    items.sort(key=lambda item: int(item.get("duration_ms") or 0), reverse=True)
+    return items
+
+
 def api_status(
     *,
     scope: str = "all",
@@ -563,6 +764,8 @@ def api_status(
     latest_sync_details = (latest_sync or {}).get("details") or {}
     unscoped_by_agent = count_unscoped_sessions_by_agent(projects=config.projects)
 
+    selected_project_names = {name for name, _ in selected_projects}
+
     payload: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "connected_agents": list(config.agents.keys()),
@@ -583,6 +786,13 @@ def api_status(
         },
         "latest_sync": latest_sync,
         "latest_maintain": latest_maintain,
+        "recent_activity": (
+            _running_activity_rows(selected_projects=selected_projects)
+            + _recent_activity(
+                limit=12,
+                allowed_projects=selected_project_names if normalized_scope == "project" else None,
+            )
+        )[:12],
     }
     if selection_error:
         payload["error"] = selection_error
