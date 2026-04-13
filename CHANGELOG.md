@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.72] - 2026-04-13
+
+### Fixed
+- CI `unit-tests` pipeline now passes again after restoring missing test compatibility helper `build_test_ctx` in `lerim.agents.tools`.
+- Addressed Ruff failures in unit tests (unused imports and ambiguous loop variable names), so release branches no longer fail lint before tests run.
+- Kept queue project filter fallback behavior while removing unused exception binding in API path resolution.
+
 ## [0.1.71] - 2026-04-13
 
 ### Added

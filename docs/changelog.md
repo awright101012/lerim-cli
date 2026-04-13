@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - No entries yet.
 
+## [0.1.72] - 2026-04-13
+
+### Fixed
+
+- Restored `build_test_ctx` compatibility helper in `lerim.agents.tools`, fixing `tests/unit/test_tools.py` import errors in CI.
+- Cleaned up Ruff violations in unit tests (unused imports and ambiguous loop variable names), so `CI / unit-tests` is green again.
+- Preserved queue project fallback semantics while removing an unused exception binding in API project resolution.
+
 ## [0.1.71] - 2026-04-13
 
 ### Added
