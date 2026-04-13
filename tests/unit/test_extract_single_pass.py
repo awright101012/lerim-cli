@@ -134,8 +134,8 @@ def test_other_tool_functions_still_take_runcontext():
 
 	Note: scan() is NOT included — it was removed from the extract
 	agent's tool list in v4. scan() itself still exists in tools.py
-	for other agents (maintain, ask) via MemoryTools, but extract does
-	not wire it.
+	for other agents (maintain, ask) via module-level tool wiring, but
+	extract does not wire it.
 	"""
 	tool_functions = [read, grep, write, edit, verify_index]
 	for fn in tool_functions:

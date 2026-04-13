@@ -14,7 +14,7 @@ import frontmatter
 import pytest
 
 from lerim.agents.extract import run_extraction
-from lerim.agents.tools import MemoryTools
+from lerim.agents.tools import build_test_ctx, verify_index
 from lerim.config.providers import build_pydantic_model
 from tests.integration.conftest import retry_on_llm_flake
 
@@ -171,8 +171,8 @@ def test_extract_index_has_all_files(tmp_lerim_root):
 		model=_build_model_from_config(),
 	)
 
-	tools = MemoryTools(memory_root=memory_root)
-	result = tools.verify_index()
+	ctx = build_test_ctx(memory_root=memory_root)
+	result = verify_index(ctx)
 	assert result.startswith("OK"), (
 		f"verify_index should return OK after extraction, got: {result}"
 	)

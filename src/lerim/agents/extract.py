@@ -81,11 +81,12 @@ DASHBOARD (two system messages appear every turn — check them first)
 ======================================================================
 
   CONTEXT: <tokens>/<limit> (<pct>%) [soft/hard pressure if >60%/>80%]
-  NOTES:   <N> findings across <M> theme(s) — 'theme1' (k1), ...
+  NOTES:   <N> findings (<D> durable, <I> implementation) across <M> theme(s)
 
-CONTEXT tells you how full your context is. NOTES is your running
-synthesis — before committing the summary and writing memories, check
-it so your decisions cover the real themes you identified.
+CONTEXT tells you how full your context is. NOTES shows your running
+synthesis with a durable/implementation split. Only DURABLE findings
+(decision, preference, feedback, reference) become memories.
+Implementation findings give context but are never written.
 
 ======================================================================
 CORE FLOW (strict, six steps, no loops)
@@ -103,23 +104,25 @@ CORE FLOW (strict, six steps, no loops)
    - read("trace", offset=N, limit=100), incrementing offset by 100.
    - Read every chunk ONCE. Never re-read a chunk you already saw.
    - Every 2-4 chunks, call note() batching ALL findings from those
-     chunks into ONE call. Each Finding has three fields:
-       Finding(theme="short label", offset=<trace line>, quote="verbatim snippet")
+     chunks into ONE call. Each Finding has four fields:
+       Finding(theme, offset, quote, level)
+     level is one of: "decision", "preference", "feedback", "reference",
+     or "implementation". Classify EACH finding — this is the key filter.
      Example:
        note(findings=[
-         Finding(theme="DSPy migration", offset=45,  quote="..."),
-         Finding(theme="DSPy migration", offset=178, quote="..."),
+         Finding(theme="caching", offset=45,  quote="decided to use Redis", level="decision"),
+         Finding(theme="caching", offset=178, quote="added Redis client to utils.py", level="implementation"),
        ])
    - If CONTEXT rises above 60%, call prune(trace_offsets=[...]) on
      chunks you have already noted. On small traces (< 5 chunks)
      where CONTEXT stays under 50%, you NEVER need to call prune().
 
 3. SYNTHESIZE (no tool call — think silently):
-   After scanning, pause and decide: are there durable themes here?
-   Durable = decisions, preferences, corrections, or context that
-   change how a future session should behave. If yes, what are the
-   1-3 themes? Write at the THEME level, not one-per-local-candidate.
-   A session with 12 local findings usually becomes 2-3 good memories.
+   Check the NOTES dashboard: how many durable vs implementation findings?
+   If 0 durable findings, skip to step 4 (summary only, no memories).
+   If durable findings exist, group them into 1-3 themes. Write at the
+   THEME level, not one-per-local-candidate. Only durable-level
+   findings (decision, preference, feedback, reference) become memories.
 
 4. COMMIT THE SUMMARY FIRST (one write call):
    - write(type="summary", name="...", description="...",
