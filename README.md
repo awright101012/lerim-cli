@@ -98,16 +98,6 @@ Or watch live activity:
 
 `lerim status --live`
 
-## Basic workflow
-
-A simple daily flow looks like this:
-
-`lerim sync`  
-`lerim maintain`  
-`lerim ask "Why did we choose this approach?"`
-
-These commands use the running Lerim service started with `lerim up` or `lerim serve`.
-
 ## What the commands do
 
 ### `lerim up`
@@ -130,11 +120,11 @@ This is the best command for demos because it makes background extraction visibl
 
 ### `lerim sync`
 
-Indexes sessions and extracts candidate memories from recent work.
+Indexes sessions and extracts candidate memories from recent work. This is done automatically by the docker container and based on the intervals you set in the config file under `~/.lerim/config.toml` file.
 
 ### `lerim maintain`
 
-Improves memory quality over time by merging duplicates, archiving weak items, and refreshing useful memories.
+Improves memory quality over time by merging duplicates, archiving weak items, and refreshing useful memories. This will also runs based on the interval you set in the `~/.lerim/config.toml` file.
 
 ### `lerim ask`
 
@@ -144,27 +134,9 @@ Example:
 
 `lerim ask "Why did we choose SQLite for local metadata?"`
 
-## Demo flow
-
-A strong demo flow for Lerim is:
-
-1. Use a coding agent in a small test repo
-2. Make one or two clear project decisions
-3. Start Lerim with `lerim up`
-4. Watch live extraction with `lerim status --live`
-5. Show generated memory under `.lerim/memory/`
-6. Ask Lerim a question about the earlier session
-
-Example:
-
-`pip install lerim`  
-`lerim up`  
-`lerim status --live`  
-`lerim ask "What are the latest important memories?"`
-
 ## Configuration
 
-`lerim init` can help with setup.
+`lerim init` can help with setup. Then you can override the configs in the `~/.lerim/config.toml` file.
 
 API keys are read from environment variables, stored by default in:
 
