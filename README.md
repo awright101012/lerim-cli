@@ -2,7 +2,7 @@
   <img src="assets/lerim.png" alt="Lerim Logo" width="160">
 </p>
 
-<h3 align="center">Persistent memory for coding agents.</h3>
+<h3 align="center">Background memory agent for coding workflows.</h3>
 
 <p align="center">
   <a href="https://pypi.org/project/lerim/"><img src="https://img.shields.io/pypi/v/lerim?style=flat-square&color=blue" alt="PyPI version"></a>
@@ -14,145 +14,252 @@
 
 <p align="center"><a href="https://lerim.dev/">lerim.dev</a> · <a href="https://docs.lerim.dev/">docs</a> · <a href="https://pypi.org/project/lerim/">pypi</a></p>
 
-## Summary
+# Lerim
 
-Lerim is a memory layer for coding agents.
-It watches agent sessions, extracts durable memories with PydanticAI, and saves them as plain markdown in `.lerim/memory/`.
+Lerim watches coding-agent sessions and builds reusable project memory automatically.
 
-Why teams use it:
+It helps your coding workflow keep memory across sessions and across tools, without vendor lock-in. Instead of losing decisions, reasoning, and project context every time a session ends, Lerim extracts and consolidates that memory in the background and stores it locally as plain markdown.
 
-- Keep project decisions and reasoning across sessions.
-- Share context between different coding agents.
-- Ask questions against past work with `lerim ask`.
-- Keep data local and file-based.
+Supported session adapters today: **Claude Code, Codex CLI, Cursor, and OpenCode**.
 
-Supported session adapters today: Claude Code, Codex CLI, Cursor, and OpenCode.
+## Why Lerim
 
-## How to use
+Coding agents are useful, but they forget too much.
 
-Prerequisites: Python 3.10+ and Docker (recommended).
+A typical workflow looks like this:
 
-Install and bootstrap:
+- you work with an agent
+- important decisions get made
+- the session ends
+- the next session starts with less context
+- the same reasoning gets repeated again
 
-```bash
-pip install lerim
-lerim init
-lerim project add .
-lerim up
-```
+Lerim fixes that.
 
-If you want a local Docker build instead of pulling from GHCR:
+It runs as a background memory agent for coding workflows. It watches sessions, extracts durable project memory, consolidates it over time, and lets you inspect or query what the workflow has learned.
 
-```bash
-lerim up --build
-```
+## What makes Lerim different
 
-Use `--build` from a source checkout (local `Dockerfile` available). For normal PyPI installs, use `lerim up`.
+Many tools give you memory infrastructure.
 
-Daily flow:
+Lerim is different because it is **workflow-native**.
 
-```bash
-lerim sync
-lerim maintain
-lerim ask "Why did we choose this approach?"
-```
+It does not only store memory.  
+It actively works on your coding workflow.
 
-These commands call the running Lerim service (`lerim up` or `lerim serve`).
+Lerim is built around three jobs:
 
-Quick validation flow before release:
+1. **Extract** memory from coding-agent sessions
+2. **Consolidate** memory over time
+3. **Track** project stream status as work evolves
 
-```bash
-lerim down
-lerim up --build
-lerim sync
-lerim maintain
-lerim ask "What are the latest important memories?"
-```
+That means Lerim is not just a database, vector store, or memory SDK.
 
-## Runtime model
+It is a **background memory agent**.
 
-Lerim runs three PydanticAI-based agent flows:
+## What you get
 
-- `sync`: indexes sessions and extracts memories.
-- `maintain`: merges duplicates, archives low-value items, refreshes memory quality.
-- `ask`: answers questions with memory context and citations.
+With Lerim, you can:
 
-Memories are markdown files under project scope (`<repo>/.lerim/memory/`) with fallback in `~/.lerim/memory/`.
+- keep project decisions across sessions
+- preserve reasoning and implementation context
+- share memory across different coding agents
+- ask questions against past work
+- keep memory local and file-based
+
+Memories are stored as plain markdown in:
+
+`<repo>/.lerim/memory/`
+
+with fallback storage under:
+
+`~/.lerim/memory/`
+
+## Quick start
+
+Prerequisites:
+
+- Python 3.10+
+- Docker recommended
+
+Install Lerim:
+
+`pip install lerim`
+
+Start the service:
+
+`lerim up`
+
+Check that it is running:
+
+`lerim status`
+
+Or watch live activity:
+
+`lerim status --live`
+
+## Basic workflow
+
+A simple daily flow looks like this:
+
+`lerim sync`  
+`lerim maintain`  
+`lerim ask "Why did we choose this approach?"`
+
+These commands use the running Lerim service started with `lerim up` or `lerim serve`.
+
+## What the commands do
+
+### `lerim up`
+
+Starts Lerim in the background.
+
+This is the command you run when you want Lerim to begin watching your workflow and processing memory tasks.
+
+### `lerim status`
+
+Shows service health and current status.
+
+Useful for checking whether Lerim is up and connected.
+
+### `lerim status --live`
+
+Shows live status updates.
+
+This is the best command for demos because it makes background extraction visible.
+
+### `lerim sync`
+
+Indexes sessions and extracts candidate memories from recent work.
+
+### `lerim maintain`
+
+Improves memory quality over time by merging duplicates, archiving weak items, and refreshing useful memories.
+
+### `lerim ask`
+
+Lets you ask questions against accumulated project memory.
+
+Example:
+
+`lerim ask "Why did we choose SQLite for local metadata?"`
+
+## Demo flow
+
+A strong demo flow for Lerim is:
+
+1. Use a coding agent in a small test repo
+2. Make one or two clear project decisions
+3. Start Lerim with `lerim up`
+4. Watch live extraction with `lerim status --live`
+5. Show generated memory under `.lerim/memory/`
+6. Ask Lerim a question about the earlier session
+
+Example:
+
+`pip install lerim`  
+`lerim up`  
+`lerim status --live`  
+`lerim ask "What are the latest important memories?"`
 
 ## Configuration
 
-`lerim init` can set this up for you.
-API keys are read from environment variables (stored in `~/.lerim/.env` by default).
+`lerim init` can help with setup.
 
-```bash
-# ~/.lerim/.env
-MINIMAX_API_KEY=your-key
-# add provider keys you use:
-# OPENROUTER_API_KEY, OPENAI_API_KEY, MINIMAX_API_KEY, ZAI_API_KEY
-```
+API keys are read from environment variables, stored by default in:
 
-Default provider example (MiniMax):
+`~/.lerim/.env`
 
-```toml
-[roles.agent]
-provider = "minimax"
-model = "MiniMax-M2.7"
-fallback_models = ["zai:glm-4.7"]
-```
+Example:
 
-## Commands
+`MINIMAX_API_KEY=your-key`  
+`OPENROUTER_API_KEY=your-key`  
+`OPENAI_API_KEY=your-key`  
+`ZAI_API_KEY=your-key`
 
-Most-used commands:
+Example provider config:
 
-```bash
-lerim status
-lerim status --live
-lerim logs --follow
-lerim queue
-lerim queue --failed
-lerim unscoped --limit 20
-lerim memory list --limit 20
-```
+`[roles.agent]`  
+`provider = "minimax"`  
+`model = "MiniMax-M2.7"`  
+`fallback_models = ["zai:glm-4.7"]`
+
+## Most-used commands
+
+`lerim status`  
+`lerim status --live`  
+`lerim logs --follow`  
+`lerim queue`  
+`lerim queue --failed`  
+`lerim unscoped --limit 20`  
+`lerim memory list --limit 20`
 
 Setup and management:
 
-```bash
-lerim connect auto
-lerim project list
-lerim project remove <name>
-lerim skill install
-```
+`lerim connect auto`  
+`lerim project list`  
+`lerim project remove <name>`  
+`lerim skill install`
 
 Alternative to Docker:
 
-```bash
-lerim serve
-```
+`lerim serve`
 
-## Web UI
+## How Lerim works
 
-Web UI is not bundled in this repo yet.
-Use `lerim dashboard` for current status and CLI alternatives.
+Lerim runs three agent flows:
+
+- `sync` for indexing sessions and extracting memories
+- `maintain` for improving memory quality over time
+- `ask` for answering questions with memory context and citations
+
+This makes Lerim useful not only as storage, but as an ongoing background process for project memory.
+
+## Who Lerim is for
+
+Lerim is for developers who:
+
+- use coding agents regularly
+- work across multiple sessions
+- switch between different coding tools
+- want local, reusable, project-level memory
+- want memory continuity without vendor lock-in
+
+## What Lerim is not
+
+Lerim is not just a vector store.
+
+Lerim is not only a memory SDK.
+
+Lerim is not tied to one coding assistant.
+
+It is a background memory agent for coding workflows.
 
 ## Docs
 
-- Full docs: [docs.lerim.dev](https://docs.lerim.dev/)
-- CLI reference: [`src/lerim/skills/cli-reference.md`](src/lerim/skills/cli-reference.md)
-- Package source map: [`src/lerim/README.md`](src/lerim/README.md)
+- Website: https://lerim.dev
+- Docs: https://docs.lerim.dev
+- PyPI: https://pypi.org/project/lerim/
 
 ## Development
 
-```bash
-uv venv && source .venv/bin/activate
-uv pip install -e '.[test]'
-tests/run_tests.sh unit
-tests/run_tests.sh quality
-```
+`uv venv && source .venv/bin/activate`  
+`uv pip install -e '.[test]'`  
+`tests/run_tests.sh unit`  
+`tests/run_tests.sh quality`
 
 ## Contributing
 
 Contributions are welcome.
 
+If you want to help, good starting points are:
+
+- session adapters and adding more agents
+- extraction quality
+- memory consolidation quality
+- docs and demo examples
+
+  
 - Read the [Contributing Guide](https://docs.lerim.dev/contributing/getting-started/)
 - Browse [open issues](https://github.com/lerim-dev/lerim-cli/issues)
 - Agent adapter PRs are especially appreciated -- see `src/lerim/adapters/` for examples
